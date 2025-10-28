@@ -87,6 +87,11 @@ inference = [
   "orjson",
   "httpx",
 ]
+reward_scoring = [
+  "requests",      # For sandbox_fusion code execution
+  "math-verify",   # For MATH dataset scoring
+  "mathruler",     # For Geometry3K scoring
+]
 ray = [
   "ray"
 ]
