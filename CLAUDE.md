@@ -161,6 +161,59 @@ runner = InferenceRunner(
 )
 ```
 
+**Reward Scoring** (`utils/reward_score/`): Evaluation utilities for synthetic data
+- Integrated from VERL project for scoring generated responses
+- Supports multiple dataset types with automatic scoring method selection
+- `default_compute_score()`: Main entry point that routes to appropriate scorer
+
+**Supported Dataset Types:**
+- **Math datasets** (via `math_verify`):
+  - GSM8K: `openai/gsm8k`
+  - MATH: `lighteval/MATH`, `DigitalLearningGmbH/MATH-lighteval`, `HuggingFaceH4/MATH-500`
+  - Numina datasets: `numina_aops_forum`, `numina_synthetic_math`, `numina_amc_aime`, etc.
+  - Uses answer extraction and exact match comparison
+
+- **Code execution** (via `sandbox_fusion`):
+  - `codecontests`, `apps`, `codeforces`, `taco`
+  - Requires external sandbox fusion server for secure code execution
+  - Must set `sandbox_fusion_url` parameter or will raise ValueError
+
+- **Geometry** (via `geo3k`):
+  - `hiyouga/geometry3k`
+  - Uses mathruler for geometric problem evaluation
+
+- **QA/SearchR1** (via `search_r1_like_qa_em`):
+  - `searchR1_nq`, `searchR1_triviaqa`, `searchR1_popqa`, `searchR1_hotpotqa`, etc.
+  - Exact match scoring for question-answering tasks
+  - Ground truth must be dict format: `{"target": [answers]}`
+
+**Installation:**
+```bash
+pip install -e ".[reward_scoring]"  # Installs math-verify, mathruler, requests
+```
+
+**Usage Example:**
+```python
+from datatrove.utils.reward_score import default_compute_score
+
+# Math dataset scoring
+score = default_compute_score(
+    data_source="openai/gsm8k",
+    solution_str="The answer is 42",
+    ground_truth="42"
+)
+
+# Code execution scoring (requires sandbox)
+score = default_compute_score(
+    data_source="codecontests",
+    solution_str="def solution(): return 42",
+    ground_truth={"test_cases": [...]},
+    sandbox_fusion_url="http://sandbox-server:5000"
+)
+```
+
+See `examples/verl_data_processing.py` for complete VERL data processing pipeline with multi-response generation and scoring.
+
 ### Key Implementation Patterns
 
 **Custom Pipeline Blocks**: Three approaches
