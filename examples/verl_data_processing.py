@@ -268,18 +268,20 @@ class ResponseScoreStats(BaseStats):
 # ==============================================================================
 def document_to_verl_adapter(document: Document) -> dict:
     """
-    Convert processed Document back to VERL parquet format with added results.
+    Convert processed Document back to VERL parquet format with results in extra_info.
 
-    Output includes original VERL fields plus:
+    Output follows VERL standard (5 required fields) with all generation results
+    and metrics stored in the extra_info field:
     - generated_responses: List of all generated responses
     - response_scores: Scores for each response
-    - avg_score, success_rate, etc.: Aggregate statistics
+    - avg_score, max_score, min_score: Aggregate statistics
+    - success_rate, num_correct, num_responses, num_failed: Success metrics
 
     Args:
         document: Processed document with inference results
 
     Returns:
-        Dictionary for parquet row
+        Dictionary for parquet row with VERL standard fields only
     """
     # Extract inference results
     inference_results = document.metadata.get("inference_results", [])
@@ -298,21 +300,31 @@ def document_to_verl_adapter(document: Document) -> dict:
         else:
             generated_responses.append({"error": result.error if hasattr(result, "error") else "unknown"})
 
+    # Copy existing extra_info and add generation results
+    extra_info = document.metadata.get("extra_info", {}).copy()
+    extra_info.update(
+        {
+            # Generated responses and scores
+            "generated_responses": generated_responses,
+            "response_scores": document.metadata.get("response_scores", []),
+            # Aggregate statistics
+            "avg_score": document.metadata.get("avg_score", 0.0),
+            "max_score": document.metadata.get("max_score", 0.0),
+            "min_score": document.metadata.get("min_score", 0.0),
+            "success_rate": document.metadata.get("success_rate", 0.0),
+            "num_correct": document.metadata.get("num_correct", 0),
+            "num_responses": document.metadata.get("num_responses", 0),
+            "num_failed": document.metadata.get("num_failed", 0),
+        }
+    )
+
     return {
-        # Original VERL fields
+        # VERL standard fields (5 required fields only)
         "data_source": document.metadata["data_source"],
         "prompt": document.metadata["original_prompt"],
         "ability": document.metadata["ability"],
         "reward_model": document.metadata["reward_model"],
-        "extra_info": document.metadata["extra_info"],
-        # Added results
-        "generated_responses": generated_responses,
-        "response_scores": document.metadata.get("response_scores", []),
-        "avg_score": document.metadata.get("avg_score", 0.0),
-        "max_score": document.metadata.get("max_score", 0.0),
-        "success_rate": document.metadata.get("success_rate", 0.0),
-        "num_correct": document.metadata.get("num_correct", 0),
-        "num_responses": document.metadata.get("num_responses", 0),
+        "extra_info": extra_info,  # All results stored here
     }
 
 
