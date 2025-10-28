@@ -272,7 +272,10 @@ def document_to_verl_adapter(document: Document) -> dict:
 
     Output follows VERL standard (5 required fields) with all generation results
     and metrics stored in the extra_info field:
-    - generated_responses: List of all generated responses
+    - generated_responses: List of responses with unified schema (Parquet compatible)
+        Each response has: text, finish_reason, usage, error, is_success
+        Success: text/finish_reason/usage filled, error=None, is_success=True
+        Failure: text/usage=None, finish_reason="error", error filled, is_success=False
     - response_scores: Scores for each response
     - avg_score, max_score, min_score: Aggregate statistics
     - success_rate, num_correct, num_responses, num_failed: Success metrics
@@ -286,7 +289,8 @@ def document_to_verl_adapter(document: Document) -> dict:
     # Extract inference results
     inference_results = document.metadata.get("inference_results", [])
 
-    # Format responses for output
+    # Format responses for output with unified schema (for Parquet compatibility)
+    # All responses have the same fields regardless of success/failure
     generated_responses = []
     for result in inference_results:
         if isinstance(result, InferenceSuccess):
@@ -295,10 +299,20 @@ def document_to_verl_adapter(document: Document) -> dict:
                     "text": result.text,
                     "finish_reason": result.finish_reason,
                     "usage": result.usage,
+                    "error": None,
+                    "is_success": True,
                 }
             )
         else:
-            generated_responses.append({"error": result.error if hasattr(result, "error") else "unknown"})
+            generated_responses.append(
+                {
+                    "text": None,
+                    "finish_reason": "error",
+                    "usage": None,
+                    "error": result.error if hasattr(result, "error") else "unknown",
+                    "is_success": False,
+                }
+            )
 
     # Copy existing extra_info and add generation results
     extra_info = document.metadata.get("extra_info", {}).copy()
