@@ -217,12 +217,12 @@ def _process_single_case(
 import sys
 import traceback
 
+# Define test function
+{test_code}
+
 try:
     # Setup entry point (e.g., candidate = Solution().twoSum)
     candidate = {entry_point}
-
-    # Define test function
-    {test_code}
 
     # Execute tests
     check(candidate)
