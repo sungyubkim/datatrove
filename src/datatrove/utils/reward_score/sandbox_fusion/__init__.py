@@ -25,6 +25,37 @@ FaaS service provided by public cloud, eg: volcengine.com.
 logger = logging.getLogger(__name__)
 
 
+def convert_leetcode_format(leetcode_test_cases):
+    """
+    Convert LeetCode format to a format compatible with check_correctness.
+
+    LeetCode format contains:
+        - entry_point: String expression to get the function (e.g., "Solution().minCost")
+        - import_prefix: Helper imports and classes to execute before user code
+        - test_code: Test function definition with assertions
+
+    This is converted to a format that check_correctness can handle:
+        - Single test case with empty stdin input
+        - Special fields (import_prefix, entry_point, test_code) preserved for code assembly
+        - No expected output (success determined by assertion pass/fail)
+
+    Args:
+        leetcode_test_cases: Dictionary with entry_point, import_prefix, test_code keys
+
+    Returns:
+        Dictionary compatible with check_correctness input format
+    """
+    logger.info(f"Converting LeetCode format with entry_point: {leetcode_test_cases.get('entry_point')}")
+
+    return {
+        "inputs": [""],  # Single test case with empty stdin
+        "outputs": [None],  # No output comparison needed (assertions determine success)
+        "import_prefix": leetcode_test_cases.get("import_prefix", ""),
+        "entry_point": leetcode_test_cases.get("entry_point", ""),
+        "test_code": leetcode_test_cases.get("test_code", "")
+    }
+
+
 def compute_score(
     sandbox_fusion_url, concurrent_semaphore, memory_limit_mb, completion, test_cases, continuous=False, timeout=10
 ):
@@ -68,10 +99,16 @@ def compute_score(
                 logger.error(f"Failed to parse test_cases JSON: {e}")
                 return 0.0, [{"error": "Invalid test_cases JSON format"}]
 
-        if test_cases is not None and "assert_case" in test_cases and isinstance(test_cases.get("assert_case"), list):
+        # Priority 1: LeetCode format (entry_point + test_code)
+        if test_cases is not None and "entry_point" in test_cases and "test_code" in test_cases:
+            logger.info("Detected LeetCode test format")
+            test_cases = convert_leetcode_format(test_cases)
+        # Priority 2: Assert case format
+        elif test_cases is not None and "assert_case" in test_cases and isinstance(test_cases.get("assert_case"), list):
             assert_cases = test_cases.get("assert_case")
             test_cases.setdefault("inputs", ["" for _ in assert_cases])
             test_cases.setdefault("outputs", [None for _ in assert_cases])
+        # Priority 3: Standard format validation
         elif not test_cases or "inputs" not in test_cases or "outputs" not in test_cases:
             logger.error("Invalid test_cases structure.")
             return 0.0, [{"error": "Invalid test_cases structure (missing inputs/outputs)"}]

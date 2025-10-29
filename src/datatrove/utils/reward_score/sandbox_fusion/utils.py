@@ -182,15 +182,72 @@ def _process_single_case(
     language: str,
     concurrent_semaphore: Optional[threading.Semaphore] = None,
     fn_name: Optional[str] = None,
+    import_prefix: Optional[str] = None,  # NEW: for LeetCode format
+    entry_point: Optional[str] = None,    # NEW: for LeetCode format
+    test_code: Optional[str] = None       # NEW: for LeetCode format
 ) -> tuple[int, dict[str, Any]]:
-    """Helper function to process a single test case."""
+    """
+    Helper function to process a single test case.
+
+    Supports three modes:
+    1. LeetCode format: import_prefix + entry_point + test_code
+    2. Function wrapper: fn_name (existing)
+    3. Raw code execution: neither
+    """
     api_response = None
     error_msg = None
     logger.info(f"Processing test case {case_index + 1}.")
 
     current_generation_code = generation
 
-    if fn_name and language == "python":
+    # Priority 1: LeetCode format (import_prefix + entry_point + test_code)
+    if import_prefix and entry_point and test_code and language == "python":
+        logger.info(f"Case {case_index + 1}: Using LeetCode format (entry_point: {entry_point})")
+
+        leetcode_wrapper = f"""
+# === Import Prefix (Helper Classes/Functions) START ===
+{import_prefix}
+# === Import Prefix END ===
+
+# === User's Generated Code START ===
+{generation}
+# === User's Generated Code END ===
+
+# === Test Execution START ===
+import sys
+import traceback
+
+try:
+    # Setup entry point (e.g., candidate = Solution().twoSum)
+    candidate = {entry_point}
+
+    # Define test function
+    {test_code}
+
+    # Execute tests
+    check(candidate)
+
+    # Success marker
+    print("ALL_TESTS_PASSED")
+    sys.exit(0)
+
+except AssertionError as e:
+    # Test failed (wrong answer)
+    print(f"ASSERTION_FAILED: {{e}}", file=sys.stderr)
+    sys.exit(1)
+
+except Exception as e:
+    # Code error (not test failure)
+    print(f"CODE_ERROR: {{e}}", file=sys.stderr)
+    traceback.print_exc(file=sys.stderr)
+    sys.exit(2)
+# === Test Execution END ===
+"""
+        current_generation_code = leetcode_wrapper
+        expected_output = "ALL_TESTS_PASSED"
+
+    # Priority 2: Function wrapper (existing fn_name logic)
+    elif fn_name and language == "python":
         # Wrapper assumes stdin_data is a JSON string for function arguments.
         wrapper_code = f"""
 import traceback
@@ -483,6 +540,10 @@ def check_correctness(
     inputs = in_outs["inputs"]
     expected_outputs = in_outs["outputs"]
     fn_name = in_outs.get("fn_name")
+    # Extract LeetCode format fields
+    import_prefix = in_outs.get("import_prefix", "")
+    entry_point = in_outs.get("entry_point", "")
+    test_code = in_outs.get("test_code", "")
     num_cases = len(inputs)
     assert_cases = in_outs.get("assert_case", [""] * num_cases)  # Default to empty strings if not provided
     results = [None] * num_cases  # Initialize with placeholders
@@ -522,6 +583,9 @@ def check_correctness(
                 language,
                 concurrent_semaphore,
                 fn_name,
+                import_prefix,  # NEW: for LeetCode format
+                entry_point,     # NEW: for LeetCode format
+                test_code        # NEW: for LeetCode format
             ): i
             for i, stdin_data in enumerate(inputs)
         }
