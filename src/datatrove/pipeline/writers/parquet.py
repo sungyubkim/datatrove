@@ -55,6 +55,29 @@ class ParquetWriter(DiskWriter):
         self._writers.pop(original_name).close()
         super()._on_file_switch(original_name, old_filename, new_filename)
 
+    def close_file(self, original_name: str):
+        """
+        Override to properly flush batches and close PyArrow writer.
+
+        This ensures that:
+        1. Any buffered data in _batches is written to the file
+        2. The PyArrow ParquetWriter writes the footer and metadata
+        3. The file handler is properly closed
+
+        Args:
+            original_name: Logical filename from _get_output_filename()
+        """
+        # 1. Flush any remaining batch data for this file
+        if original_name in self._batches:
+            self._write_batch(original_name)
+
+        # 2. Close PyArrow ParquetWriter (writes footer/metadata)
+        if original_name in self._writers:
+            self._writers.pop(original_name).close()
+
+        # 3. Close file handler (handles 000_ prefix via parent class)
+        super().close_file(original_name)
+
     def _write_batch(self, filename):
         if not self._batches[filename]:
             return

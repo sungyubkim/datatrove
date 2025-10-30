@@ -135,6 +135,28 @@ class DiskWriter(PipelineStep, ABC):
             return f"{os.path.dirname(filename)}/{self.file_id_counter[filename]:03d}_{os.path.basename(filename)}"
         return f"{self.file_id_counter[filename]:03d}_{os.path.basename(filename)}"
 
+    def close_file(self, original_name: str):
+        """
+        Close a specific file properly.
+
+        Handles max_file_size logic by calculating the actual physical filename
+        from the logical filename. Subclasses can override this method to add
+        custom cleanup logic (e.g., flushing buffers, writing metadata).
+
+        Args:
+            original_name: Logical filename from _get_output_filename()
+                          (e.g., "00000_chunk_00000.parquet")
+        """
+        # Calculate actual physical filename (with 000_ prefix if max_file_size > 0)
+        if self.max_file_size > 0:
+            actual_filename = self._get_filename_with_file_id(original_name)
+        else:
+            actual_filename = original_name
+
+        # Close file handler if it exists
+        if actual_filename in self.output_mg._output_files:
+            self.output_mg.pop(actual_filename).close()
+
     def write(self, document: Document, rank: int = 0, **kwargs):
         """
         Top level method to write a `Document` to disk. Will compute its output filename, adapt it to desired output format, write it and save stats.

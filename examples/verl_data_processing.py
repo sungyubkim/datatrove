@@ -344,7 +344,7 @@ pipeline = [
         output_writer=ParquetWriter(
             output_folder=OUTPUT_PATH,
             adapter=document_to_verl_adapter,
-            output_filename="${rank}.parquet",
+            output_filename="${rank}_chunk_${chunk_index}.parquet",
             compression="snappy",
         ),
         checkpoints_local_dir=CHECKPOINTS_PATH,  # Enable checkpointing
