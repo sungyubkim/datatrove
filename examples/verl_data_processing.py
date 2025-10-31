@@ -165,7 +165,7 @@ def normalize_score(
 
     Different dataset types return different score formats:
     - Code datasets (codecontests, apps, etc.): Return bare float (e.g., 0.75)
-    - Math datasets (GSM8K, MATH, etc.): Return dict with reward_think, reward_format
+    - Math datasets (GSM8K, MATH, etc.): Return dict with reward_think, reward_fmt
     - Failures: Return dict with error field
 
     This function ensures all scores have the same fields, preventing Parquet schema errors.
@@ -181,7 +181,7 @@ def normalize_score(
             "score": float,               # Always present
             "error": str | None,          # None for success, error message for failure
             "reward_think": float | None, # For math datasets, None otherwise
-            "reward_format": float | None # For math datasets, None otherwise
+            "reward_fmt": float | None    # For math datasets, None otherwise
         }
     """
     if is_success:
@@ -191,7 +191,7 @@ def normalize_score(
                 "score": float(score_result),
                 "error": None,
                 "reward_think": None,
-                "reward_format": None,
+                "reward_fmt": None,
             }
         # Handle math datasets that return a dict
         elif isinstance(score_result, dict):
@@ -199,7 +199,7 @@ def normalize_score(
                 "score": score_result.get("score", 0.0),
                 "error": None,
                 "reward_think": score_result.get("reward_think", None),
-                "reward_format": score_result.get("reward_format", None),
+                "reward_fmt": score_result.get("reward_fmt", None),
             }
         else:
             # Unexpected type, treat as zero score
@@ -207,7 +207,7 @@ def normalize_score(
                 "score": 0.0,
                 "error": f"Unexpected score type: {type(score_result)}",
                 "reward_think": None,
-                "reward_format": None,
+                "reward_fmt": None,
             }
     else:
         # Failure case
@@ -215,7 +215,7 @@ def normalize_score(
             "score": 0.0,
             "error": error_msg if error_msg else "unknown",
             "reward_think": None,
-            "reward_format": None,
+            "reward_fmt": None,
         }
 
 
