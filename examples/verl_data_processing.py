@@ -20,6 +20,7 @@ from datatrove.data import Document
 from datatrove.executor.local import LocalPipelineExecutor
 from datatrove.pipeline.inference.run_inference import (
     InferenceConfig,
+    InferenceError,
     InferenceRunner,
     InferenceSuccess,
 )
@@ -219,6 +220,37 @@ def normalize_score(
         }
 
 
+def reconstruct_inference_result(
+    result: dict | InferenceSuccess | InferenceError,
+) -> InferenceSuccess | InferenceError:
+    """
+    Reconstruct InferenceSuccess/InferenceError objects from dictionaries.
+
+    When documents are loaded from checkpoints, inference_results are
+    deserialized as plain dictionaries. This function converts them back
+    to proper dataclass instances for isinstance() checks to work.
+
+    Args:
+        result: Either a dictionary (from checkpoint) or already an object
+
+    Returns:
+        InferenceSuccess or InferenceError object
+    """
+    # Already an object, return as-is
+    if isinstance(result, (InferenceSuccess, InferenceError)):
+        return result
+
+    # Dictionary from checkpoint - reconstruct based on fields
+    if "error" in result:
+        return InferenceError(error=result["error"])
+    else:
+        return InferenceSuccess(
+            text=result.get("text", ""),
+            finish_reason=result.get("finish_reason", ""),
+            usage=result.get("usage", {}),
+        )
+
+
 def postprocess_and_score(runner: InferenceRunner, document: Document) -> Document:
     """
     Post-process document after inference: score responses and compute statistics.
@@ -239,6 +271,8 @@ def postprocess_and_score(runner: InferenceRunner, document: Document) -> Docume
         Updated document with scoring results (or None to skip saving)
     """
     inference_results = document.metadata.get("inference_results", [])
+    # Reconstruct objects from checkpoint dictionaries
+    inference_results = [reconstruct_inference_result(r) for r in inference_results]
     ground_truth = document.metadata["reward_model"].get("ground_truth", "")
     data_source = document.metadata["data_source"]
 
@@ -365,6 +399,8 @@ def document_to_verl_adapter(document: Document) -> dict:
     """
     # Extract inference results
     inference_results = document.metadata.get("inference_results", [])
+    # Reconstruct objects from checkpoint dictionaries
+    inference_results = [reconstruct_inference_result(r) for r in inference_results]
 
     # Format responses for output with unified schema (for Parquet compatibility)
     # All responses have the same fields regardless of success/failure
