@@ -289,7 +289,8 @@ class CheckpointManager:
                             filename = output_writer_context._get_output_filename(
                                 document, rank, chunk_index=chunk_index
                             )
-                            output_writer_context.close_file(filename)
+                            # Use asyncio.to_thread to avoid blocking event loop with I/O
+                            await asyncio.to_thread(output_writer_context.close_file, filename)
                             self.new_completed_chunks.add(chunk_index)
                             # update the last chunk index/delete local file etc
                             should_update_last_chunk_index = True
@@ -760,7 +761,8 @@ class InferenceRunner(PipelineStep):
                     filename = output_writer_context._get_output_filename(
                         dummy, rank, chunk_index=chunk_idx
                     )
-                    output_writer_context.close_file(filename)
+                    # Use asyncio.to_thread to avoid blocking event loop with I/O
+                    await asyncio.to_thread(output_writer_context.close_file, filename)
 
         # 5. shutdown inference server and metrics
         server_task.cancel()
