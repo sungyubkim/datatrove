@@ -302,11 +302,10 @@ class CheckpointManager:
                             self.new_completed_chunks.add(chunk_index)
                             # update the last chunk index/delete local file etc
                             should_update_last_chunk_index = True
-            # can not be within the chunk lock
-            if should_update_last_chunk_index:
-                # Use unsafe version since we already hold checkpoint_file_lock
-                await self._update_last_chunk_index_unsafe(rank)
-            return (self.last_chunk_index + 1) * self.records_per_chunk if self.last_chunk_index >= 0 else 0, all_ids
+        # can not be within the checkpoint_file_lock - call outside to avoid deadlock
+        if should_update_last_chunk_index:
+            await self.update_last_chunk_index(rank)
+        return (self.last_chunk_index + 1) * self.records_per_chunk if self.last_chunk_index >= 0 else 0, all_ids
 
     async def cleanup_last_chunk(self, rank: int, chunk_index: int):
         import shutil
@@ -324,10 +323,9 @@ class CheckpointManager:
             # Use asyncio.to_thread to avoid blocking event loop with I/O
             await asyncio.to_thread(remove_rank_dir, rank_dir, chunk_index)
 
-    async def _update_last_chunk_index_unsafe(self, rank: int):
+    async def update_last_chunk_index(self, rank: int):
         """
         Update the last chunk index and delete the local file if it's complete.
-        UNSAFE: Assumes checkpoint_file_lock is already held by caller.
         """
         import os
 
@@ -341,33 +339,26 @@ class CheckpointManager:
             with self.checkpoints_local_dir_df.open(filepath, "wt") as f:
                 f.write(content)
 
-        # possibly multiple ones, in case file +2 finished before +1
-        while self.last_chunk_index + 1 in self.new_completed_chunks:
-            self.last_chunk_index += 1
-            async with self.file_locks[self.last_chunk_index]:
-                chunk_file = os.path.join(
-                    self.checkpoints_local_dir, f"{rank:05d}/chunk_{self.last_chunk_index:05d}.jsonl"
-                )
-                # Use asyncio.to_thread to avoid blocking event loop with I/O
-                await asyncio.to_thread(remove_chunk_file, chunk_file)
-            logger.info(f"Finished chunk {self.last_chunk_index}")
-            # clean up
-            self.file_locks.pop(self.last_chunk_index)
-            self.per_chunk_counts.pop(self.last_chunk_index)
-            self.new_completed_chunks.remove(self.last_chunk_index)
-            # save new last chunk index
-            # Use asyncio.to_thread to avoid blocking event loop with I/O
-            await asyncio.to_thread(
-                write_last_chunk_index, f"last_chunk/{rank:05d}.txt", str(self.last_chunk_index)
-            )
-
-    async def update_last_chunk_index(self, rank: int):
-        """
-        Update the last chunk index and delete the local file if it's complete.
-        Thread-safe version that acquires checkpoint_file_lock.
-        """
         async with self.checkpoint_file_lock:
-            await self._update_last_chunk_index_unsafe(rank)
+            # possibly multiple ones, in case file +2 finished before +1
+            while self.last_chunk_index + 1 in self.new_completed_chunks:
+                self.last_chunk_index += 1
+                async with self.file_locks[self.last_chunk_index]:
+                    chunk_file = os.path.join(
+                        self.checkpoints_local_dir, f"{rank:05d}/chunk_{self.last_chunk_index:05d}.jsonl"
+                    )
+                    # Use asyncio.to_thread to avoid blocking event loop with I/O
+                    await asyncio.to_thread(remove_chunk_file, chunk_file)
+                logger.info(f"Finished chunk {self.last_chunk_index}")
+                # clean up
+                self.file_locks.pop(self.last_chunk_index)
+                self.per_chunk_counts.pop(self.last_chunk_index)
+                self.new_completed_chunks.remove(self.last_chunk_index)
+                # save new last chunk index
+                # Use asyncio.to_thread to avoid blocking event loop with I/O
+                await asyncio.to_thread(
+                    write_last_chunk_index, f"last_chunk/{rank:05d}.txt", str(self.last_chunk_index)
+                )
 
     def chunk_index_gen(self):
         ci = 0
