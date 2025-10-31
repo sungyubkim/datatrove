@@ -226,6 +226,11 @@ class CheckpointManager:
         import aiofiles
         import orjson
 
+        def ensure_dir_exists(save_dir: str):
+            """Helper to create directory if it doesn't exist"""
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir, exist_ok=True)
+
         should_update_last_chunk_index = False
         async with self.file_locks[chunk_index]:
             # write to main output writer
@@ -237,9 +242,11 @@ class CheckpointManager:
                 # save to checkpoint/chunk
                 save_path = os.path.join(self.checkpoints_local_dir, f"{rank:05d}/chunk_{chunk_index:05d}.jsonl")
                 save_dir = os.path.dirname(save_path)
-                if not os.path.exists(save_dir):
-                    os.makedirs(save_dir, exist_ok=True)
-                if not os.path.exists(save_path):
+                # Use asyncio.to_thread to avoid blocking event loop with I/O
+                await asyncio.to_thread(ensure_dir_exists, save_dir)
+                # Check file existence in thread-safe way before logging
+                file_exists = await asyncio.to_thread(os.path.exists, save_path)
+                if not file_exists:
                     logger.info(f"Creating checkpoint file {save_path}")
                 async with aiofiles.open(save_path, "ab") as f:
                     await f.write(orjson.dumps(dataclasses.asdict(document), option=orjson.OPT_APPEND_NEWLINE))
@@ -249,7 +256,8 @@ class CheckpointManager:
                     filename = output_writer_context._get_output_filename(
                         document, rank, chunk_index=chunk_index
                     )
-                    output_writer_context.close_file(filename)
+                    # Use asyncio.to_thread to avoid blocking event loop with I/O
+                    await asyncio.to_thread(output_writer_context.close_file, filename)
                     self.new_completed_chunks.add(chunk_index)
                     should_update_last_chunk_index = True
         # can not be within the chunk lock
@@ -302,19 +310,34 @@ class CheckpointManager:
     async def cleanup_last_chunk(self, rank: int, chunk_index: int):
         import shutil
 
+        def remove_rank_dir(rank_dir: str, chunk_index: int):
+            """Helper to remove rank directory if conditions are met"""
+            if os.path.exists(rank_dir) and self.last_chunk_index == chunk_index:
+                shutil.rmtree(rank_dir)
+
         if self.checkpoints_local_dir is not None:
             self.new_completed_chunks.add(chunk_index)
             await self.update_last_chunk_index(rank)
             rank_dir = os.path.join(self.checkpoints_local_dir, f"{rank:05d}")
             # second part should be redundant as we technically only call this after everything completes but seems buggy for now
-            if os.path.exists(rank_dir) and self.last_chunk_index == chunk_index:
-                shutil.rmtree(rank_dir)
+            # Use asyncio.to_thread to avoid blocking event loop with I/O
+            await asyncio.to_thread(remove_rank_dir, rank_dir, chunk_index)
 
     async def update_last_chunk_index(self, rank: int):
         """
         Update the last chunk index and delete the local file if it's complete.
         """
         import os
+
+        def remove_chunk_file(chunk_file: str):
+            """Helper to remove chunk file if it exists"""
+            if os.path.exists(chunk_file):
+                os.remove(chunk_file)
+
+        def write_last_chunk_index(filepath: str, content: str):
+            """Helper to write last chunk index"""
+            with self.checkpoints_local_dir_df.open(filepath, "wt") as f:
+                f.write(content)
 
         async with self.checkpoint_file_lock:
             # possibly multiple ones, in case file +2 finished before +1
@@ -324,16 +347,18 @@ class CheckpointManager:
                     chunk_file = os.path.join(
                         self.checkpoints_local_dir, f"{rank:05d}/chunk_{self.last_chunk_index:05d}.jsonl"
                     )
-                    if os.path.exists(chunk_file):
-                        os.remove(chunk_file)
+                    # Use asyncio.to_thread to avoid blocking event loop with I/O
+                    await asyncio.to_thread(remove_chunk_file, chunk_file)
                 logger.info(f"Finished chunk {self.last_chunk_index}")
                 # clean up
                 self.file_locks.pop(self.last_chunk_index)
                 self.per_chunk_counts.pop(self.last_chunk_index)
                 self.new_completed_chunks.remove(self.last_chunk_index)
                 # save new last chunk index
-                with self.checkpoints_local_dir_df.open(f"last_chunk/{rank:05d}.txt", "wt") as f:
-                    f.write(str(self.last_chunk_index))
+                # Use asyncio.to_thread to avoid blocking event loop with I/O
+                await asyncio.to_thread(
+                    write_last_chunk_index, f"last_chunk/{rank:05d}.txt", str(self.last_chunk_index)
+                )
 
     def chunk_index_gen(self):
         ci = 0
