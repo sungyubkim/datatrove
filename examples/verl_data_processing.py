@@ -125,6 +125,100 @@ async def multi_response_query_builder(
 # ==============================================================================
 # 3. Postprocessing - Score all responses and compute statistics
 # ==============================================================================
+def normalize_usage(usage: dict | None) -> dict:
+    """
+    Normalize token usage to a consistent schema for Parquet compatibility.
+
+    InferenceSuccess.usage may have varying keys depending on the model/server.
+    This ensures all usage dicts have the same structure.
+
+    Args:
+        usage: Token usage dict from inference result, or None for failures
+
+    Returns:
+        Normalized dict with consistent schema:
+        {
+            "prompt_tokens": int,      # Always present (0 if missing)
+            "completion_tokens": int,  # Always present (0 if missing)
+            "total_tokens": int        # Always present (0 if missing)
+        }
+    """
+    if usage is None:
+        return {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+
+    return {
+        "prompt_tokens": usage.get("prompt_tokens", 0),
+        "completion_tokens": usage.get("completion_tokens", 0),
+        "total_tokens": usage.get("total_tokens", 0),
+    }
+
+
+def normalize_score(
+    score_result: dict | float | int, is_success: bool = True, error_msg: str = None
+) -> dict:
+    """
+    Normalize score results to a consistent schema for Parquet compatibility.
+
+    Different dataset types return different score formats:
+    - Code datasets (codecontests, apps, etc.): Return bare float (e.g., 0.75)
+    - Math datasets (GSM8K, MATH, etc.): Return dict with reward_think, reward_format
+    - Failures: Return dict with error field
+
+    This function ensures all scores have the same fields, preventing Parquet schema errors.
+
+    Args:
+        score_result: Score output from compute_score (float, int, or dict)
+        is_success: Whether inference succeeded
+        error_msg: Error message if inference failed
+
+    Returns:
+        Normalized dict with consistent schema:
+        {
+            "score": float,               # Always present
+            "error": str | None,          # None for success, error message for failure
+            "reward_think": float | None, # For math datasets, None otherwise
+            "reward_format": float | None # For math datasets, None otherwise
+        }
+    """
+    if is_success:
+        # Handle code datasets that return just a float
+        if isinstance(score_result, (int, float)):
+            return {
+                "score": float(score_result),
+                "error": None,
+                "reward_think": None,
+                "reward_format": None,
+            }
+        # Handle math datasets that return a dict
+        elif isinstance(score_result, dict):
+            return {
+                "score": score_result.get("score", 0.0),
+                "error": None,
+                "reward_think": score_result.get("reward_think", None),
+                "reward_format": score_result.get("reward_format", None),
+            }
+        else:
+            # Unexpected type, treat as zero score
+            return {
+                "score": 0.0,
+                "error": f"Unexpected score type: {type(score_result)}",
+                "reward_think": None,
+                "reward_format": None,
+            }
+    else:
+        # Failure case
+        return {
+            "score": 0.0,
+            "error": error_msg if error_msg else "unknown",
+            "reward_think": None,
+            "reward_format": None,
+        }
+
+
 def postprocess_and_score(runner: InferenceRunner, document: Document) -> Document:
     """
     Post-process document after inference: score responses and compute statistics.
@@ -157,21 +251,28 @@ def postprocess_and_score(runner: InferenceRunner, document: Document) -> Docume
     scores = []
     for result in inference_results:
         if isinstance(result, InferenceSuccess):
-            score_dict = compute_score(
-                data_source,
-                result.text,
-                ground_truth,
-                sandbox_fusion_url=SANDBOX_FUSION_URL,
-            )
-            scores.append(score_dict)
+            try:
+                score_dict = compute_score(
+                    data_source,
+                    result.text,
+                    ground_truth,
+                    sandbox_fusion_url=SANDBOX_FUSION_URL,
+                )
+                # Normalize score to consistent schema for Parquet compatibility
+                normalized_score = normalize_score(score_dict, is_success=True)
+            except Exception as e:
+                # Handle scoring errors (e.g., invalid format, API errors)
+                normalized_score = normalize_score(
+                    None, is_success=False, error_msg=f"Scoring error: {str(e)}"
+                )
+            scores.append(normalized_score)
         else:
-            # Failed inference gets zero score
-            scores.append(
-                {
-                    "score": 0.0,
-                    "error": result.error if hasattr(result, "error") else "unknown",
-                }
+            # Failed inference gets zero score with normalized schema
+            error_msg = result.error if hasattr(result, "error") else "unknown"
+            normalized_score = normalize_score(
+                None, is_success=False, error_msg=error_msg
             )
+            scores.append(normalized_score)
 
     # Compute aggregate statistics
     if scores:
@@ -274,7 +375,7 @@ def document_to_verl_adapter(document: Document) -> dict:
                 {
                     "text": result.text,
                     "finish_reason": result.finish_reason,
-                    "usage": result.usage,
+                    "usage": normalize_usage(result.usage),
                     "error": None,
                     "is_success": True,
                 }
@@ -284,7 +385,7 @@ def document_to_verl_adapter(document: Document) -> dict:
                 {
                     "text": None,
                     "finish_reason": "error",
-                    "usage": None,
+                    "usage": normalize_usage(None),
                     "error": result.error if hasattr(result, "error") else "unknown",
                     "is_success": False,
                 }
