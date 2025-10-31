@@ -28,5 +28,5 @@ def compute_score(
     return {
         "score": reward_correct,
         "reward_think": reward_think,
-        "reward_format": reward_fmt,
+        "reward_fmt": reward_fmt,
     }

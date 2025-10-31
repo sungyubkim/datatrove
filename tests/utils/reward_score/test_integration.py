@@ -24,7 +24,7 @@ Therefore, Janet makes \\boxed{18} dollars every day at the farmers' market."""
 
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_realistic_math_style_output(self):
         """Test realistic MATH dataset-style output."""
@@ -41,7 +41,7 @@ The sum of the solutions is \\boxed{5}"""
 
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_cascade_failure_at_think_stage(self):
         """Test that failure at think stage prevents all downstream scoring."""
@@ -52,7 +52,7 @@ The sum of the solutions is \\boxed{5}"""
         # Unbalanced think tag should cause all rewards to be 0
         assert result["score"] == 0.0
         assert result["reward_think"] == 0.0
-        assert result["reward_format"] == 0.0
+        assert result["reward_fmt"] == 0.0
 
     def test_cascade_failure_at_format_stage(self):
         """Test that failure at format stage prevents correctness scoring."""
@@ -63,7 +63,7 @@ The sum of the solutions is \\boxed{5}"""
         # Think passes, but format fails, so correctness not checked
         assert result["score"] == 0.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 0.0
+        assert result["reward_fmt"] == 0.0
 
     def test_cascade_failure_at_correctness_stage(self):
         """Test failure at final correctness stage."""
@@ -74,7 +74,7 @@ The sum of the solutions is \\boxed{5}"""
         # Think and format pass, but answer is wrong
         assert result["score"] == 0.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_multiple_boxed_expressions_complex(self):
         """Test complex case with multiple boxed expressions throughout."""
@@ -90,7 +90,7 @@ Initial answer was \\boxed{30}, but correcting to \\boxed{42}"""
         # Should use last boxed from each part
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_edge_case_nested_structures(self):
         """Test edge case with deeply nested structures."""
@@ -105,7 +105,7 @@ Final answer: \\boxed{{{a, b}, {c, d}}}"""
 
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_edge_case_latex_heavy(self):
         """Test edge case with LaTeX-heavy content."""
@@ -123,7 +123,7 @@ The solutions are \boxed{\frac{-4 + 2}{2}} and \boxed{\frac{-4 - 2}{2}}"""
         # Should match the last boxed expression
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_real_world_partial_credit_scenario(self):
         """Test real-world scenario where model gets partial credit."""
@@ -142,7 +142,7 @@ Janet makes \\boxed{19} dollars."""  # Wrong final answer despite correct proces
         # Gets credit for think and format, but not correctness
         assert result["score"] == 0.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_batch_processing_scenario(self):
         """Test scenario simulating batch processing of multiple answers."""
@@ -183,7 +183,7 @@ Janet makes \\boxed{19} dollars."""  # Wrong final answer despite correct proces
 
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_very_long_think_process(self):
         """Test with very long think process."""
@@ -194,7 +194,7 @@ Janet makes \\boxed{19} dollars."""  # Wrong final answer despite correct proces
 
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_empty_strings(self):
         """Test handling of empty or whitespace-only strings."""
@@ -204,7 +204,7 @@ Janet makes \\boxed{19} dollars."""  # Wrong final answer despite correct proces
 
         # Empty boxed: math_verify may fail to parse empty content
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
         # Score may be 0.0 if math_verify cannot handle empty strings
         # This is acceptable behavior for edge case
 
@@ -221,7 +221,7 @@ Janet makes \\boxed{19} dollars."""  # Wrong final answer despite correct proces
             result = compute_score(output, truth)
             # Note: Some may fail depending on math_verify's capabilities
             assert result["reward_think"] == 1.0
-            assert result["reward_format"] == 1.0
+            assert result["reward_fmt"] == 1.0
 
     def test_error_recovery_patterns(self):
         """Test patterns where model corrects itself."""
@@ -237,4 +237,4 @@ The correct answer is \\boxed{42}"""
 
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0

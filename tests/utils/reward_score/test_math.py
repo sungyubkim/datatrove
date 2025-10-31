@@ -14,7 +14,7 @@ class TestComputeScore:
 
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_missing_think_tag(self):
         """Test answer without think tag - think tag is optional."""
@@ -25,7 +25,7 @@ class TestComputeScore:
         # Without think tag, parse_think returns (text, True), so it passes
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_unbalanced_think_tag(self):
         """Test answer with unbalanced think tag."""
@@ -35,7 +35,7 @@ class TestComputeScore:
 
         assert result["score"] == 0.0
         assert result["reward_think"] == 0.0
-        assert result["reward_format"] == 0.0
+        assert result["reward_fmt"] == 0.0
 
     def test_format_mismatch_prediction_missing_boxed(self):
         """Test format mismatch - prediction missing boxed format."""
@@ -45,7 +45,7 @@ class TestComputeScore:
 
         assert result["score"] == 0.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 0.0
+        assert result["reward_fmt"] == 0.0
 
     def test_format_mismatch_ground_truth_missing_boxed(self):
         """Test format mismatch - ground truth missing boxed format."""
@@ -55,7 +55,7 @@ class TestComputeScore:
 
         assert result["score"] == 0.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 0.0
+        assert result["reward_fmt"] == 0.0
 
     def test_wrong_answer(self):
         """Test correct format but wrong answer."""
@@ -65,7 +65,7 @@ class TestComputeScore:
 
         assert result["score"] == 0.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_mathematically_equivalent_fraction_decimal(self):
         """Test mathematically equivalent answers: fraction vs decimal."""
@@ -76,7 +76,7 @@ class TestComputeScore:
         # With strict=False, should recognize equivalence
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_float_rounding(self):
         """Test float rounding with float_rounding=2."""
@@ -87,7 +87,7 @@ class TestComputeScore:
         # With float_rounding=2, should match
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_complex_latex_expression(self):
         """Test complex LaTeX expression."""
@@ -98,7 +98,7 @@ class TestComputeScore:
         # Math verify should handle algebraic simplification
         # This might be True or False depending on math_verify's capabilities
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
         # Score depends on whether math_verify can verify algebraic equivalence
 
     def test_multiple_boxed_in_output(self):
@@ -110,7 +110,7 @@ class TestComputeScore:
         # Should use last boxed in both prediction and ground truth
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_negative_numbers(self):
         """Test with negative numbers."""
@@ -120,7 +120,7 @@ class TestComputeScore:
 
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_algebraic_expression(self):
         """Test with algebraic expression."""
@@ -130,7 +130,7 @@ class TestComputeScore:
 
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_vector_or_set_notation(self):
         """Test with vector or set notation."""
@@ -140,7 +140,7 @@ class TestComputeScore:
 
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_timeout_score_parameter(self):
         """Test that timeout_score parameter is accepted (interface consistency)."""
@@ -151,7 +151,7 @@ class TestComputeScore:
         # timeout_score is not currently used in the implementation
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_empty_think_tag(self):
         """Test with empty think tag."""
@@ -161,7 +161,7 @@ class TestComputeScore:
 
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_multiline_think_content(self):
         """Test with multiline think content."""
@@ -176,7 +176,7 @@ class TestComputeScore:
 
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_string_answer(self):
         """Test with string answer (should work if both match)."""
@@ -186,7 +186,7 @@ class TestComputeScore:
 
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_whitespace_handling(self):
         """Test handling of extra whitespace."""
@@ -196,7 +196,7 @@ class TestComputeScore:
 
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
 
     def test_case_sensitivity(self):
         """Test case sensitivity in answers - math_verify is case-insensitive."""
@@ -207,4 +207,4 @@ class TestComputeScore:
         # math_verify treats these as equivalent (case-insensitive)
         assert result["score"] == 1.0
         assert result["reward_think"] == 1.0
-        assert result["reward_format"] == 1.0
+        assert result["reward_fmt"] == 1.0
