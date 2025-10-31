@@ -159,20 +159,16 @@ def normalize_usage(usage: dict | None) -> dict:
 
 
 def normalize_score(
-    score_result: dict | float | int, is_success: bool = True, error_msg: str = None
+    score_result: dict, is_success: bool = True, error_msg: str = None
 ) -> dict:
     """
     Normalize score results to a consistent schema for Parquet compatibility.
 
-    Different dataset types return different score formats:
-    - Code datasets (codecontests, apps, etc.): Return bare float (e.g., 0.75)
-    - Math datasets (GSM8K, MATH, etc.): Return dict with reward_think, reward_fmt
-    - Failures: Return dict with error field
-
-    This function ensures all scores have the same fields, preventing Parquet schema errors.
+    compute_score now always returns a dict with score, reward_think, and reward_fmt fields.
+    This function adds the error field for consistent Parquet schema.
 
     Args:
-        score_result: Score output from compute_score (float, int, or dict)
+        score_result: Score dict from compute_score (with score, reward_think, reward_fmt)
         is_success: Whether inference succeeded
         error_msg: Error message if inference failed
 
@@ -181,35 +177,17 @@ def normalize_score(
         {
             "score": float,               # Always present
             "error": str | None,          # None for success, error message for failure
-            "reward_think": float | None, # For math datasets, None otherwise
-            "reward_fmt": float | None    # For math datasets, None otherwise
+            "reward_think": float | None, # For math datasets, None/1.0 otherwise
+            "reward_fmt": float | None    # For math datasets, None/1.0 otherwise
         }
     """
     if is_success:
-        # Handle code datasets that return just a float
-        if isinstance(score_result, (int, float)):
-            return {
-                "score": float(score_result),
-                "error": None,
-                "reward_think": None,
-                "reward_fmt": None,
-            }
-        # Handle math datasets that return a dict
-        elif isinstance(score_result, dict):
-            return {
-                "score": score_result.get("score", 0.0),
-                "error": None,
-                "reward_think": score_result.get("reward_think", None),
-                "reward_fmt": score_result.get("reward_fmt", None),
-            }
-        else:
-            # Unexpected type, treat as zero score
-            return {
-                "score": 0.0,
-                "error": f"Unexpected score type: {type(score_result)}",
-                "reward_think": None,
-                "reward_fmt": None,
-            }
+        return {
+            "score": score_result.get("score", 0.0),
+            "error": None,
+            "reward_think": score_result.get("reward_think", None),
+            "reward_fmt": score_result.get("reward_fmt", None),
+        }
     else:
         # Failure case
         return {

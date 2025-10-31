@@ -71,9 +71,17 @@ def compute_score(
     if isinstance(res, dict):
         return res
     elif isinstance(res, int | float | bool):
-        return float(res)
+        return {
+            "score": float(res),
+            "reward_fmt": 1.0,
+            "reward_think": 1.0,
+        }
     else:
-        return float(res[0])
+        return {
+            "score": float(res[0]),
+            "reward_fmt": 1.0,
+            "reward_think": 1.0,
+        }
 
 
 __all__ = ["default_compute_score"]
