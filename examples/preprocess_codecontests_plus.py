@@ -167,7 +167,21 @@ Constraints:
 - Time limit: {data['time_limit']}ms
 - Memory limit: {data['memory_limit']}MB
 
-Read the input from stdin and write the output to stdout. Provide a complete Python solution."""
+Read the input from stdin and write the output to stdout.
+
+Provide your solution in a code block. Examples:
+
+```python
+# Python solution
+```
+
+```cpp
+// C++ solution
+```
+
+```java
+// Java solution
+```"""
 
         # Create VERL-formatted document
         return {
