@@ -15,7 +15,7 @@ import json
 import logging
 import traceback
 
-from .utils import check_correctness
+from .utils import check_correctness, SUPPORTED_LANGUAGES
 
 """
 Verify code correctness using the Sandbox Fusion (https://github.com/bytedance/SandboxFusion).
@@ -23,6 +23,18 @@ You can either deploy the sandbox_fusion service yourself or use the
 FaaS service provided by public cloud, eg: volcengine.com.
 """
 logger = logging.getLogger(__name__)
+
+# Language mapping from dataset format to sandbox_fusion format
+LANGUAGE_MAPPING = {
+    'py3': 'python',
+    'py2': 'python',
+    'python3': 'python',
+    'python2': 'python',
+    'c++': 'cpp',
+    'c++17': 'cpp',
+    'c++14': 'cpp',
+    'c++11': 'cpp',
+}
 
 
 def convert_leetcode_format(leetcode_test_cases):
@@ -76,18 +88,35 @@ def compute_score(
         metadata_list: List containing execution metadata for each test case.
     """
     solution = completion
+    detected_language = "python"  # Default language
+
     if "```python" in completion:
         solution = completion.split("```python")[-1].split("```")[0]
+        detected_language = "python"
     elif "```" in completion:
-        # Handle cases like ```\ncode\n```
+        # Handle cases like ```cpp\ncode\n```
         parts = completion.split("```")
         if len(parts) >= 2:
             solution = parts[1]
-            # Remove potential language specifier like 'python\n'
+            # Extract potential language specifier
             if "\n" in solution:
                 first_line, rest = solution.split("\n", 1)
-                if first_line.strip().isalpha():  # Simple check for language name
-                    solution = rest
+                first_line_stripped = first_line.strip().lower()
+
+                # Check if it's a valid language specifier
+                if first_line_stripped.replace('+', '').replace('#', '').isalnum():
+                    # Apply language mapping
+                    mapped_language = LANGUAGE_MAPPING.get(first_line_stripped, first_line_stripped)
+
+                    # Verify if supported
+                    if mapped_language in SUPPORTED_LANGUAGES:
+                        detected_language = mapped_language
+                        solution = rest
+                        logger.info(f"Detected language: {first_line_stripped} -> {detected_language}")
+                    else:
+                        # Language not supported, fallback to python but keep the first line
+                        logger.warning(f"Unsupported language '{first_line_stripped}', using Python as fallback")
+                        detected_language = "python"
     else:
         return 0.0, [{"error": "Invalid completion (missing code block)"}]
 
@@ -124,6 +153,7 @@ def compute_score(
             timeout=timeout,
             concurrent_semaphore=concurrent_semaphore,
             memory_limit_mb=memory_limit_mb,
+            language=detected_language,  # Pass detected language
         )
 
         # Calculate score

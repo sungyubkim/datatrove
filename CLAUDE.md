@@ -9,23 +9,42 @@ DataTrove is a library for processing, filtering, and deduplicating text data at
 ## Development Commands
 
 ### Setup
+
+**Using uv (Recommended):**
+```bash
+uv pip install -e ".[dev]"  # Install with all dev dependencies
+uv run pre-commit install   # Install pre-commit hooks
+
+# Run scripts with uv
+uv run python examples/example_script.py
+```
+
+**Using pip:**
 ```bash
 pip install -e ".[dev]"  # Install with all dev dependencies
 pre-commit install       # Install pre-commit hooks
 ```
 
+Note: This project requires Python >= 3.10.0
+
 ### Testing
+
+**Using uv:**
+```bash
+# Run all tests
+uv run pytest -sv ./tests/
+
+# Run specific test file
+uv run pytest -sv ./tests/pipeline/test_filters.py
+
+# Run specific test
+uv run pytest -sv ./tests/pipeline/test_filters.py::test_filter_name
+```
+
+**Using make:**
 ```bash
 # Run all tests
 make test
-# or
-python -m pytest -sv ./tests/
-
-# Run specific test file
-python -m pytest -sv ./tests/pipeline/test_filters.py
-
-# Run specific test
-python -m pytest -sv ./tests/pipeline/test_filters.py::test_filter_name
 ```
 
 ### Code Quality
@@ -177,6 +196,10 @@ runner = InferenceRunner(
   - `codecontests`, `apps`, `codeforces`, `taco`
   - Requires external sandbox fusion server for secure code execution
   - Must set `sandbox_fusion_url` parameter or will raise ValueError
+  - **Multi-language support**: Python, C++, Java, Go, Rust, and 24+ more languages
+  - Automatic language detection from code blocks (e.g., ````cpp`, ````java`)
+  - Language mapping: `py3`/`py2` → `python`, `c++`/`c++17` → `cpp`
+  - Fallback to Python for unsupported languages
 
 - **Geometry** (via `geo3k`):
   - `hiyouga/geometry3k`
@@ -203,14 +226,36 @@ score = default_compute_score(
     ground_truth="42"
 )
 
-# Code execution scoring (requires sandbox)
+# Code execution scoring - Python (requires sandbox)
 score = default_compute_score(
     data_source="codecontests",
-    solution_str="def solution(): return 42",
-    ground_truth={"test_cases": [...]},
+    solution_str="```python\ndef solution(): return 42\n```",
+    ground_truth={"inputs": ["5"], "outputs": ["42"]},
+    sandbox_fusion_url="http://sandbox-server:5000"
+)
+
+# Code execution scoring - C++ (automatic language detection)
+score = default_compute_score(
+    data_source="codecontests",
+    solution_str="```cpp\n#include <iostream>\nint main() { std::cout << 42; }\n```",
+    ground_truth={"inputs": ["5"], "outputs": ["42"]},
+    sandbox_fusion_url="http://sandbox-server:5000"
+)
+
+# Code execution scoring - Java (automatic language detection)
+score = default_compute_score(
+    data_source="codecontests",
+    solution_str="```java\npublic class Main { public static void main(String[] args) { System.out.println(42); } }\n```",
+    ground_truth={"inputs": ["5"], "outputs": ["42"]},
     sandbox_fusion_url="http://sandbox-server:5000"
 )
 ```
+
+**Supported Languages in Sandbox Fusion:**
+- Programming: python, cpp, java, go, rust, javascript (nodejs), typescript, kotlin, swift, scala
+- Scripting: bash, php, perl, ruby, lua, R
+- Testing: pytest, junit, jest, go_test
+- Other: csharp, sql, cuda, verilog, lean, racket, D_ut
 
 See `examples/verl_data_processing.py` for complete VERL data processing pipeline with multi-response generation and scoring.
 
