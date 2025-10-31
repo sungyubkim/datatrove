@@ -750,7 +750,19 @@ class InferenceRunner(PipelineStep):
                 await asyncio.gather(*tasks_pool)
                 await self.checkpoint_manager.cleanup_last_chunk(rank, chunk_index)
 
-        # 4. shutdown inference server and metrics
+            # 4. Close any incomplete chunks before context exit
+            # This ensures Parquet files are finalized even if records_per_chunk wasn't reached
+            for chunk_idx, count in self.checkpoint_manager.per_chunk_counts.items():
+                if count > 0 and count < self.checkpoint_manager.records_per_chunk:
+                    # Incomplete chunk - need explicit close to finalize Parquet files
+                    from datatrove.data import Document
+                    dummy = Document(text="", id="", metadata={})
+                    filename = output_writer_context._get_output_filename(
+                        dummy, rank, chunk_index=chunk_idx
+                    )
+                    output_writer_context.close_file(filename)
+
+        # 5. shutdown inference server and metrics
         server_task.cancel()
         metrics_task.cancel()
 
