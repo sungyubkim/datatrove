@@ -146,6 +146,10 @@ where = ["src"]
 [tool.setuptools.package-data]
 datatrove = ["assets/*"]
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
 [tool.ruff]
 lint.ignore = [
   "C901", # `function_name` is too complex

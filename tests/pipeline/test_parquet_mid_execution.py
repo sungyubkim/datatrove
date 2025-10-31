@@ -140,10 +140,17 @@ def test_parquet_corruption_during_execution():
             print(f"   {status}: {pf.name} - {msg}")
 
 
+@pytest.mark.skip(reason="Bug reproduction test - kept for historical reference. The bug has been fixed in commit ff1970e.")
 async def test_async_checkpoint_scenario():
     """
-    Test the async scenario that happens in actual InferenceRunner.
-    This simulates concurrent document processing and chunk completion.
+    HISTORICAL: Bug reproduction test for Parquet corruption issue.
+
+    This test was written to reproduce the original bug where checkpoint restoration
+    would create corrupted Parquet files. The bug was fixed by changing from
+    output_mg.pop().close() to close_file() in parse_existing_checkpoints().
+
+    This test is kept to document the original issue but is skipped since the bug is now fixed.
+    See test_async_checkpoint_scenario_after_fix() for the verification test.
     """
     num_docs = 15
     records_per_chunk = 5
@@ -207,6 +214,114 @@ async def test_async_checkpoint_scenario():
 
             # This should find corruption
             assert len(corrupted_files) > 0, "Expected corrupted files during execution"
+
+
+async def test_async_checkpoint_scenario_after_fix():
+    """
+    Verification test for the Parquet corruption fix (commit ff1970e).
+
+    This test verifies that after the fix, CheckpointManager.write_document()
+    correctly closes Parquet files using close_file() instead of output_mg.pop().close().
+
+    The test should pass with:
+    - All Parquet files valid (magic bytes present)
+    - No corrupted files during or after execution
+    - Correct number of documents in each chunk
+    """
+    num_docs = 15
+    records_per_chunk = 5
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        output_path = Path(temp_dir) / "output"
+        checkpoint_path = Path(temp_dir) / "checkpoints"
+
+        writer = ParquetWriter(
+            output_folder=str(output_path),
+            output_filename="${rank}_chunk_${chunk_index}.parquet",
+            compression="snappy",
+        )
+
+        checkpoint_manager = CheckpointManager(
+            checkpoints_local_dir=str(checkpoint_path),
+            records_per_chunk=records_per_chunk,
+        )
+
+        documents = [
+            Document(text=f"Test {i}", id=f"doc_{i}", metadata={})
+            for i in range(num_docs)
+        ]
+
+        chunk_index_gen = checkpoint_manager.chunk_index_gen()
+
+        async def process_doc(doc, chunk_idx):
+            """Simulate async document processing."""
+            await asyncio.sleep(0.01)  # Simulate some async work
+            return doc, chunk_idx
+
+        with writer:
+            chunk_idx = -1
+            for i, doc in enumerate(documents):
+                chunk_idx = next(chunk_index_gen)
+
+                # Process document
+                processed_doc, ci = await process_doc(doc, chunk_idx)
+
+                # Write using CheckpointManager's write_document method
+                await checkpoint_manager.write_document(
+                    processed_doc, rank=0, chunk_index=ci, output_writer_context=writer
+                )
+
+            # Check files mid-execution
+            print(f"\n📊 Files during execution (after fix):")
+            all_files = sorted(output_path.glob("*.parquet"))
+
+            corrupted_files = []
+            valid_files = []
+            for pf in all_files:
+                is_valid, msg = check_parquet_file_validity(pf)
+                status = "✓" if is_valid else "❌"
+                print(f"   {status} {pf.name}: {msg}")
+                if not is_valid:
+                    corrupted_files.append((pf.name, msg))
+                else:
+                    valid_files.append(pf.name)
+
+            # After fix: Should have NO corrupted files
+            if corrupted_files:
+                print(f"\n❌ ERROR: Found {len(corrupted_files)} corrupted file(s):")
+                for name, msg in corrupted_files:
+                    print(f"   - {name}: {msg}")
+                assert False, f"Expected NO corrupted files after fix, but found {len(corrupted_files)}"
+
+            print(f"\n✅ SUCCESS: All {len(valid_files)} files are valid!")
+
+        # After writer.close(), verify again
+        print(f"\n📊 After writer.close():")
+        all_files = sorted(output_path.glob("*.parquet"))
+
+        # Read all documents to verify content
+        import pyarrow.parquet as pq
+
+        total_docs = 0
+        for pf in all_files:
+            is_valid, msg = check_parquet_file_validity(pf)
+            assert is_valid, f"File {pf.name} should be valid after writer.close(): {msg}"
+
+            table = pq.read_table(pf)
+            num_rows = len(table)
+            total_docs += num_rows
+            print(f"   ✓ {pf.name}: {num_rows} rows")
+
+        # Verify total document count
+        assert total_docs == num_docs, f"Expected {num_docs} total documents, got {total_docs}"
+
+        # Verify expected number of chunk files
+        expected_chunks = (num_docs + records_per_chunk - 1) // records_per_chunk
+        assert len(all_files) == expected_chunks, (
+            f"Expected {expected_chunks} chunk files, got {len(all_files)}"
+        )
+
+        print(f"\n✅ All checks passed! {total_docs} documents in {len(all_files)} valid Parquet files.")
 
 
 if __name__ == "__main__":
