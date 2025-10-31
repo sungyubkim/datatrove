@@ -286,9 +286,10 @@ class CheckpointManager:
                         self.per_chunk_counts[chunk_index] += 1
                         if self.per_chunk_counts[chunk_index] == self.records_per_chunk:
                             # close the file
-                            output_writer_context.output_mg.pop(
-                                output_writer_context._get_output_filename(document, rank, chunk_index=chunk_index)
-                            ).close()
+                            filename = output_writer_context._get_output_filename(
+                                document, rank, chunk_index=chunk_index
+                            )
+                            output_writer_context.close_file(filename)
                             self.new_completed_chunks.add(chunk_index)
                             # update the last chunk index/delete local file etc
                             should_update_last_chunk_index = True
