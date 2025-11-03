@@ -91,6 +91,9 @@ reward_scoring = [
   "requests",      # For sandbox_fusion code execution
   "math-verify",   # For MATH dataset scoring
   "mathruler",     # For Geometry3K scoring
+  "langdetect",    # For IFEval language detection
+  "immutabledict", # For IFEval immutable data structures
+  "nltk",          # For IFEval sentence/word counting
 ]
 ray = [
   "ray"

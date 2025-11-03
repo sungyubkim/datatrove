@@ -63,6 +63,15 @@ def compute_score(
             ground_truth,
             continuous=True,
         )
+    elif data_source in ["allenai/IF_multi_constraints_upto5", "ifeval", "sungyub/ifbench-verl"]:
+        # Instruction Following evaluation
+        from . import ifeval
+
+        res = ifeval.compute_score(
+            solution_str,
+            ground_truth,
+            **kwargs
+        )
     else:
         raise NotImplementedError(
             f"Reward function is not implemented for {data_source=}"
