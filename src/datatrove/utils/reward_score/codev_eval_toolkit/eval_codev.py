@@ -102,8 +102,24 @@ def verify_one_sample_wrapper(args):
 
 
 def extract_verilog(verilog_code):
-    pattern = re.compile(r"```verilog\s*([\s\S]*?)\s*```")
-    matches = re.findall(pattern, verilog_code)
-    if matches:
-        return matches[-1]
+    # Try multiple markdown formats
+    patterns = [
+        r"```verilog\s*([\s\S]*?)\s*```",
+        r"```v\s*([\s\S]*?)\s*```",
+        r"```systemverilog\s*([\s\S]*?)\s*```",
+        r"```sv\s*([\s\S]*?)\s*```",
+    ]
+
+    for pattern in patterns:
+        matches = re.findall(pattern, verilog_code)
+        if matches:
+            return matches[-1]
+
+    # Fallback: Extract plain text with module keyword (Qwen3 format)
+    if "module" in verilog_code and "endmodule" in verilog_code:
+        # Remove <think> and <answer> tags if present
+        cleaned = re.sub(r"<think>.*?</think>", "", verilog_code, flags=re.DOTALL)
+        cleaned = re.sub(r"</?answer>", "", cleaned)
+        return cleaned.strip()
+
     return None

@@ -233,7 +233,7 @@ def verify_verilog_via_sandbox(
                 "stderr": stderr[:500] if stderr else None
             }
         else:
-            logger.warning(f"Verification failed: error_rate={error_rate}")
+            logger.info(f"Functional mismatch: {error_rate*100:.1f}% of test cases failed (code compiled and ran successfully)")
             return {
                 "correct": False,
                 "error_rate": error_rate,
@@ -334,8 +334,18 @@ def compute_score(
                 golden_top = v.auto_top(golden_code)
                 gate_top = v.auto_top(extracted_answer)
             except Exception as e:
-                logger.error(f"Failed to find top modules: {e}")
-                verification_results.append({"correct": False, "parse_error": str(e)})
+                logger.error(f"Failed to parse Verilog modules: {e}")
+
+                # Log the problematic input for debugging (truncated to 300 chars)
+                logger.error(f"Golden code (first 300 chars): {golden_code[:300]!r}...")
+                logger.error(f"Extracted answer (first 300 chars): {extracted_answer[:300] if extracted_answer else None!r}...")
+
+                verification_results.append({
+                    "correct": False,
+                    "parse_error": str(e),
+                    "golden_code_preview": golden_code[:200] if golden_code else None,
+                    "extracted_answer_preview": extracted_answer[:200] if extracted_answer else None
+                })
                 rewards.append(0.0)
                 continue
 
