@@ -349,12 +349,14 @@ def compute_score(
                 gate_top = v.auto_top(extracted_answer)
             except Exception as e:
                 logger.error(f"Failed to parse GENERATED Verilog code: {e}")
-                logger.error(f"Extracted answer (first 300 chars): {extracted_answer[:300] if extracted_answer else None!r}...")
+                logger.error(f"Generated code (first 300 chars): {extracted_answer[:300] if extracted_answer else None!r}...")
+                logger.error(f"Golden code for comparison (first 300 chars): {golden_code[:300]!r}...")
 
                 verification_results.append({
                     "correct": False,
                     "parse_error": f"Generated code parsing failed: {str(e)}",
                     "extracted_answer_preview": extracted_answer[:200] if extracted_answer else None,
+                    "golden_code_preview": golden_code[:200] if golden_code else None,
                 })
                 rewards.append(0.0)
                 continue
