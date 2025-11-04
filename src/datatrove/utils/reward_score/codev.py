@@ -16,6 +16,8 @@
 CodeV scorer for Verilog code generation.
 Performs equivalence checking between generated code and golden reference
 using Sandbox Fusion for Verilog simulation.
+
+Supports both XML (<think>, <answer>) and GPT OSS (<|channel|>analysis, <|channel|>final) formats.
 """
 
 import json
@@ -28,24 +30,52 @@ from typing import Optional
 
 from .codev_eval_toolkit import eda_tools, extract_verilog
 from .sandbox_fusion.utils import call_sandbox_api
+from .format_handlers import detect_format, get_format_handler
 
 logger = logging.getLogger(__name__)
 
 
-def check_format(output):
+def check_format(output, format_type="auto"):
     """
-    Check if the output has proper format with <think> and <answer> tags.
+    Check if the output has proper format with thinking and answer sections.
+
+    Supports:
+    - XML format: <think>...</think> and <answer>...</answer> tags
+    - GPT OSS format: <|channel|>analysis and <|channel|>final blocks
 
     Args:
         output: String containing the model output
+        format_type: Response format ("xml", "gpt_oss", or "auto" for auto-detection)
 
     Returns:
         bool: True if format is valid, False otherwise
+
+    Examples:
+        XML format:
+        >>> check_format("<think>reasoning</think><answer>```verilog\\nmodule...\\n```</answer>")
+        True
+
+        GPT OSS format:
+        >>> check_format("<|start|>assistant<|channel|>analysis<|message|>reasoning<|end|>\\n<|start|>assistant<|channel|>final<|message|>```verilog\\nmodule...\\n```<|return|>")
+        True
     """
-    tags = ["<think>", "</think>", "<answer>", "</answer>"]
-    tag_count = [output.count(tag) for tag in tags]
-    positions = [output.find(tag) for tag in tags]
-    return min(tag_count) == max(tag_count) == 1 and positions[0] < positions[1] < positions[2] < positions[3]
+    if format_type == "auto":
+        format_type = detect_format(output)
+
+    if format_type == "gpt_oss":
+        # For GPT OSS, check that we have analysis and final channels
+        handler = get_format_handler(format_type)
+        has_analysis = handler.has_analysis(output)
+        has_final = handler.has_final_response(output)
+
+        # Must have at least final channel (analysis is optional)
+        return has_final
+    else:
+        # XML format: must have <think>, </think>, <answer>, </answer> in correct order
+        tags = ["<think>", "</think>", "<answer>", "</answer>"]
+        tag_count = [output.count(tag) for tag in tags]
+        positions = [output.find(tag) for tag in tags]
+        return min(tag_count) == max(tag_count) == 1 and positions[0] < positions[1] < positions[2] < positions[3]
 
 
 def assemble_verilog_code(golden_code, dut_code, testbench_code):
@@ -209,18 +239,22 @@ def compute_score(
     extra_info: dict = None,
     sandbox_fusion_url: str = "http://localhost:8080/run_code",
     concurrent_semaphore: Optional[threading.Semaphore] = None,
+    format_type: str = "auto",
     **kwargs
 ):
     """
     Compute score for CodeV Verilog generation task.
 
+    Supports both XML (<think>, <answer>) and GPT OSS (<|channel|>analysis, <|channel|>final) formats.
+
     Args:
         data_source: Data source identifier (should be 'codev')
-        solution_str: Generated solution string (may contain <think> and <answer> tags)
+        solution_str: Generated solution string (may contain thinking and answer sections)
         ground_truth: Pickled ground truth data containing golden Verilog code and port info
         extra_info: Optional extra information
         sandbox_fusion_url: URL of Sandbox Fusion service
         concurrent_semaphore: Optional semaphore for concurrency control
+        format_type: Response format ("xml", "gpt_oss", or "auto" for auto-detection)
         **kwargs: Additional arguments
 
     Returns:
@@ -230,14 +264,17 @@ def compute_score(
         # Unpickle ground truth
         gts = pickle.loads(ground_truth)
 
-        # Handle assistant prefix if present
-        response_pos = solution_str.find("<|im_start|>assistant")
-        if response_pos >= 0:
-            solution_str = solution_str[response_pos:]
+        # Extract assistant response from chat template wrapper (format-aware)
+        # This handles Llama, Qwen, GPT OSS, and raw formats
+        if format_type == "auto":
+            format_type = detect_format(solution_str)
 
-        # Check format (must have proper tags)
-        if not check_format(solution_str):
-            logger.warning("Invalid format: missing or incorrect tags")
+        handler = get_format_handler(format_type)
+        solution_str = handler.extract_assistant_response(solution_str, model_type="auto")
+
+        # Check format (must have proper tags/channels)
+        if not check_format(solution_str, format_type=format_type):
+            logger.warning("Invalid format: missing or incorrect tags/channels")
             return {
                 "score": 0.0,
                 "reward_fmt": 0.0,

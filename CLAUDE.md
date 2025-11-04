@@ -191,6 +191,8 @@ runner = InferenceRunner(
   - MATH: `lighteval/MATH`, `DigitalLearningGmbH/MATH-lighteval`, `HuggingFaceH4/MATH-500`
   - Numina datasets: `numina_aops_forum`, `numina_synthetic_math`, `numina_amc_aime`, etc.
   - Uses answer extraction and exact match comparison
+  - Supports both XML (`<think>`, `\boxed{}`) and GPT OSS (`<|channel|>analysis`, `<|channel|>final`) formats
+  - Auto-format detection via `format_type="auto"`
 
 - **Code execution** (via `sandbox_fusion`):
   - `codecontests`, `apps`, `codeforces`, `taco`
@@ -213,12 +215,17 @@ runner = InferenceRunner(
 - **ToolRL** (via `toolrl`):
   - `rlla`, `toolrl`, `tool_learning`, `toolace`, `hammer`, `xlam`, `sungyub/toolrl-verl`
   - Evaluates tool learning tasks with three components:
-    - Format reward: XML-like structure validation (`<think>`, `<tool_call>`, `<response>`)
+    - Format reward: Structure validation for XML (`<think>`, `<tool_call>`, `<response>`) or GPT OSS (`<|channel|>analysis`, `to=functions.X`, `<|channel|>final`) formats
     - Correctness reward: Tool name and parameter matching (frequency-based scoring)
-    - Length reward (optional): Reasoning length in `<think>` tags
-  - Supports Llama and Qwen chat templates with auto-detection
+    - Length reward (optional): Reasoning length in thinking sections
+  - **Format Support**:
+    - **XML format**: Traditional tags (`<think>`, `<tool_call>`, `<response>`) - Qwen/Llama default
+    - **GPT OSS format**: Special tokens (`<|start|>`, `<|channel|>`, `<|message|>`, `<|end|>`, `<|call|>`, `<|return|>`) - GPT OSS 120B
+    - Auto-detection by default via `format_type="auto"`
+  - Supports Llama, Qwen, and GPT OSS chat templates with auto-detection
   - No external dependencies required (pure Python)
   - Returns dict with `score`, `reward_fmt`, `reward_correct`, `reward_length`, `reward_think`
+  - **Note**: `toolrl_gpt_oss.py` is deprecated - use unified `toolrl.py` with `format_type="gpt_oss"` or `"auto"`
 
 - **CodeV** (via `codev`):
   - `codev`, `sungyub/codev-r1-verl`
@@ -232,6 +239,10 @@ runner = InferenceRunner(
   - **External Dependencies**:
     - Requires Sandbox Fusion server for Verilog simulation
     - Must set `sandbox_fusion_url` parameter or will raise ValueError
+  - **Format Support**:
+    - **XML format**: `<think>`, `<answer>` tags
+    - **GPT OSS format**: `<|channel|>analysis`, `<|channel|>final` blocks
+    - Auto-detection via `format_type="auto"`
   - Evaluation process:
     - Extracts Verilog code from markdown code blocks
     - Generates automatic testbenches (random + directed tests)
@@ -249,11 +260,23 @@ pip install -e ".[reward_scoring]"  # Installs all reward scoring dependencies
 ```python
 from datatrove.utils.reward_score import compute_score
 
-# Math dataset scoring
+# Math dataset scoring - XML format (default)
 score = compute_score(
     data_source="openai/gsm8k",
-    solution_str="The answer is 42",
-    ground_truth="42"
+    solution_str="<think>Let me calculate...</think>\nThe answer is \\boxed{42}",
+    ground_truth="\\boxed{42}",
+    format_type="auto"  # Auto-detect format (xml/gpt_oss)
+)
+
+# Math dataset scoring - GPT OSS format
+score = compute_score(
+    data_source="openai/gsm8k",
+    solution_str=(
+        "<|start|>assistant<|channel|>analysis<|message|>Let me calculate...<|end|>\n"
+        "<|start|>assistant<|channel|>final<|message|>\\boxed{42}<|return|>"
+    ),
+    ground_truth="\\boxed{42}",
+    format_type="gpt_oss"
 )
 
 # Code execution scoring - Python (requires sandbox)
@@ -280,21 +303,54 @@ score = compute_score(
     sandbox_fusion_url="http://sandbox-server:5000"
 )
 
-# ToolRL scoring - Tool learning tasks
+# ToolRL scoring - Tool learning tasks (XML format)
 score = compute_score(
     data_source="toolrl",
     solution_str="<think>I need to search for information</think>\n<tool_call>\n{\"name\": \"search\", \"parameters\": {\"query\": \"AI\"}}\n</tool_call>",
     ground_truth="<think>...</think>\n<tool_call>\n{\"name\": \"search\", \"parameters\": {\"query\": \"AI\"}}\n</tool_call>",
     model_type="auto",  # Auto-detect chat template (llama/qwen)
+    format_type="auto",  # Auto-detect format (xml/gpt_oss)
     enable_length_reward=True
 )
 
-# CodeV scoring - Verilog code generation (requires sandbox + iverilog)
+# ToolRL scoring - GPT OSS format
+score = compute_score(
+    data_source="toolrl",
+    solution_str=(
+        "<|start|>assistant<|channel|>analysis<|message|>I need to search for information<|end|>\n"
+        "<|start|>assistant to=functions.search<|channel|>commentary json<|message|>"
+        "{\"query\": \"AI\"}<|call|>"
+    ),
+    ground_truth=(
+        "<|start|>assistant<|channel|>analysis<|message|>...<|end|>\n"
+        "<|start|>assistant to=functions.search<|channel|>commentary json<|message|>"
+        "{\"query\": \"AI\"}<|call|>"
+    ),
+    format_type="gpt_oss",  # Explicit GPT OSS format
+    enable_length_reward=True
+)
+
+# CodeV scoring - Verilog code generation (XML format, requires sandbox + iverilog)
 score = compute_score(
     data_source="codev",
     solution_str="<think>Creating a simple adder</think>\n<answer>```verilog\nmodule adder(input a, input b, output sum); assign sum = a + b; endmodule\n```</answer>",
     ground_truth=pickle.dumps({"code": "module adder_gold(input a, input b, output sum); assign sum = a + b; endmodule", ...}),
-    sandbox_fusion_url="http://sandbox-server:5000"
+    sandbox_fusion_url="http://sandbox-server:5000",
+    format_type="auto"
+)
+
+# CodeV scoring - GPT OSS format
+score = compute_score(
+    data_source="codev",
+    solution_str=(
+        "<|start|>assistant<|channel|>analysis<|message|>Creating a simple adder<|end|>\n"
+        "<|start|>assistant<|channel|>final<|message|>```verilog\n"
+        "module adder(input a, input b, output sum); assign sum = a + b; endmodule\n"
+        "```<|return|>"
+    ),
+    ground_truth=pickle.dumps({"code": "module adder_gold(input a, input b, output sum); assign sum = a + b; endmodule", ...}),
+    sandbox_fusion_url="http://sandbox-server:5000",
+    format_type="gpt_oss"
 )
 ```
 

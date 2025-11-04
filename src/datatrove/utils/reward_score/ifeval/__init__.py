@@ -8,6 +8,8 @@ Compatible with:
 - allenai/IF_multi_constraints_upto5
 - sungyub/ifbench-verl
 - GRPO training scripts
+
+Supports both XML (<think>) and GPT OSS (<|channel|>analysis) formats.
 """
 
 import ast
@@ -17,44 +19,55 @@ import re
 from typing import Dict, Any
 
 from .instructions_registry import INSTRUCTION_DICT
+from ..format_handlers import remove_thinking as remove_thinking_format_aware
 
 
 logger = logging.getLogger(__name__)
 
 
-def remove_thinking_section(text: str) -> str:
+def remove_thinking_section(text: str, format_type: str = "auto") -> str:
     """
     Remove thinking/reasoning section from model output.
 
+    This function is format-aware and supports:
+    - XML format: <think>, <thinking> tags
+    - GPT OSS format: <|channel|>analysis blocks
+    - Text prefixes: "Think:", "Thinking:", "Reasoning:"
+
     Args:
         text: Model output text
+        format_type: Response format ("xml", "gpt_oss", or "auto" for auto-detection)
 
     Returns:
         Text with thinking sections removed
+
+    Examples:
+        XML format:
+        >>> remove_thinking_section("<think>reasoning</think>\\nFinal answer")
+        'Final answer'
+
+        GPT OSS format:
+        >>> remove_thinking_section("<|start|>assistant<|channel|>analysis<|message|>reasoning<|end|>\\n<|start|>assistant<|channel|>final<|message|>answer<|return|>")
+        '<|start|>assistant<|channel|>final<|message|>answer<|return|>'
     """
-    # Remove <think>...</think> or <thinking>...</thinking> tags
-    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<thinking>.*?</thinking>', '', text, flags=re.DOTALL | re.IGNORECASE)
-
-    # Remove "Think:", "Thinking:", "Reasoning:" sections at start
-    text = re.sub(r'^Think:.*?(?=\n\n|\Z)', '', text, flags=re.DOTALL | re.IGNORECASE | re.MULTILINE)
-    text = re.sub(r'^Thinking:.*?(?=\n\n|\Z)', '', text, flags=re.DOTALL | re.IGNORECASE | re.MULTILINE)
-    text = re.sub(r'^Reasoning:.*?(?=\n\n|\Z)', '', text, flags=re.DOTALL | re.IGNORECASE | re.MULTILINE)
-
-    return text.strip()
+    return remove_thinking_format_aware(text, format_type=format_type)
 
 
 def compute_score(
     model_output: str,
     ground_truth: str,
+    format_type: str = "auto",
     **kwargs
 ) -> Dict[str, float]:
     """
     Compute IF Eval score for instruction following.
 
+    Supports both XML (<think>) and GPT OSS (<|channel|>analysis) formats with auto-detection.
+
     Args:
         model_output: Model's generated response
         ground_truth: Constraint specification as string (JSON format)
+        format_type: Response format ("xml", "gpt_oss", or "auto" for auto-detection)
         **kwargs: Additional arguments (unused)
 
     Returns:
@@ -94,8 +107,8 @@ def compute_score(
         logger.error(f"Ground truth value: {ground_truth[:200]}...")
         return {"score": 0.0, "reward_fmt": 1.0, "reward_think": 1.0}
 
-    # Remove thinking section from model output
-    answer = remove_thinking_section(model_output)
+    # Remove thinking section from model output (format-aware)
+    answer = remove_thinking_section(model_output, format_type=format_type)
 
     # Get constraints
     instruction_keys = constraint_dict["instruction_id"]

@@ -5,9 +5,13 @@ This module implements the reward function from the ToolRL paper:
 "ToolRL: Reward is All Tool Learning Needs" (Qian et al., 2025)
 
 The reward function evaluates model outputs on three components:
-1. Format: Correct XML-like structure (<think>, <tool_call>, <response>)
+1. Format: Correct structure (XML tags or GPT OSS channels)
 2. Correctness: Tool name and parameter matching
-3. Length (optional): Reasoning length in <think> tags
+3. Length (optional): Reasoning length in thinking sections
+
+Supports both:
+- XML format: <think>, <tool_call>, <response> tags (Qwen/Llama default)
+- GPT OSS format: <|channel|>analysis, to=functions.X, <|channel|>final tokens
 
 Reference: https://github.com/qiancheng0/ToolRL
 """
@@ -16,6 +20,8 @@ import re
 import json
 import os
 from collections import Counter
+
+from .format_handlers import detect_format, get_format_handler
 
 
 def match_score(list1, list2):
@@ -44,56 +50,30 @@ def match_score(list1, list2):
     return intersection / max_possible if max_possible > 0 else 0.0
 
 
-def compute_format_reward(response, answer, max_reward=1.0, min_reward=0.0):
+def compute_format_reward(response, answer, max_reward=1.0, min_reward=0.0, format_type="auto"):
     """
-    Evaluate format correctness of the response.
+    Evaluate format correctness of the response using unified format handlers.
 
-    Expected formats based on ground truth:
-    - Response only: <think>...</think>\n<response>...</response>
-    - Tool call only: <think>...</think>\n<tool_call>\n...\n</tool_call>
-    - Both: <think>...</think>\n<tool_call>\n...\n</tool_call>\n<response>...</response>
-    - Think only: <think>...</think>
+    Supports both XML and GPT OSS formats with auto-detection.
+    All format-specific validation logic is delegated to format handlers.
 
     Args:
         response: Model output string
         answer: Ground truth string
         max_reward: Maximum reward for correct format
         min_reward: Minimum reward for incorrect format
+        format_type: Response format ("xml", "gpt_oss", or "auto")
 
     Returns:
         float: Format reward score
     """
-    reward = min_reward
+    # Auto-detect format if needed
+    if format_type == "auto":
+        format_type = detect_format(response)
 
-    if "<response>" in answer and "<tool_call>" not in answer:
-        # Expect: <think>...</think>\n<response>...</response>
-        pattern = r"^<think>.*?</think>\n<response>.*?</response>$"
-        if re.search(pattern, response, re.DOTALL) and \
-           response.count("<response>") == 1 and response.count("</response>") == 1:
-            reward = max_reward
-
-    elif "<response>" not in answer and "<tool_call>" in answer:
-        # Expect: <think>...</think>\n<tool_call>\n...\n</tool_call>
-        pattern = r"^<think>.*?</think>\n<tool_call>\n.*?\n</tool_call>$"
-        if re.search(pattern, response, re.DOTALL) and \
-           response.count("<tool_call>") == 1 and response.count("</tool_call>") == 1:
-            reward = max_reward
-
-    elif "<response>" in answer and "<tool_call>" in answer:
-        # Expect: <think>...</think>\n<tool_call>\n...\n</tool_call>\n<response>...</response>
-        pattern = r"^<think>.*?</think>\n<tool_call>\n.*?\n</tool_call>\n<response>.*?</response>$"
-        if re.search(pattern, response, re.DOTALL) and \
-           response.count("<tool_call>") == 1 and response.count("</tool_call>") == 1 and \
-           response.count("<response>") == 1 and response.count("</response>") == 1:
-            reward = max_reward
-
-    else:
-        # Expect: <think>...</think>
-        pattern = r"^<think>.*?</think>$"
-        if re.search(pattern, response, re.DOTALL):
-            reward = max_reward
-
-    return reward
+    # Delegate all format validation to format handlers
+    handler = get_format_handler(format_type)
+    return handler.compute_format_reward(response, answer, max_reward, min_reward)
 
 
 def compute_tool_call_reward(gt_tools, pd_tools, max_reward=3.0, min_reward=-3.0):
@@ -165,62 +145,73 @@ def compute_tool_call_reward(gt_tools, pd_tools, max_reward=3.0, min_reward=-3.0
     return (max_reward - min_reward) * normalized_score + min_reward
 
 
-def compute_correctness_reward(response, answer, max_reward=3.0, min_reward=-3.0):
+def compute_correctness_reward(response, answer, max_reward=3.0, min_reward=-3.0, format_type="auto"):
     """
     Evaluate correctness of tool calls in the response.
+
+    Supports both XML (<tool_call>) and GPT OSS (to=functions.X) formats.
 
     Args:
         response: Model output string
         answer: Ground truth string
         max_reward: Maximum reward for correct tool calls
         min_reward: Minimum reward for incorrect tool calls
+        format_type: Response format ("xml", "gpt_oss", or "auto")
 
     Returns:
         float: Correctness reward score
     """
-    # If no tool call expected, return 0
-    if "<tool_call>" not in answer:
+    # Auto-detect format if needed
+    if format_type == "auto":
+        format_type = detect_format(response)
+
+    handler = get_format_handler(format_type)
+
+    # Check if tool call is expected
+    gt_tools = handler.extract_tool_calls(answer)
+    if not gt_tools:
         return 0.0
 
-    # Parse ground truth tools
+    # Extract predicted tools
     try:
-        gt_tool_call = answer.split("<tool_call>")[1].split("</tool_call>")[0].strip()
-        gt_tools = gt_tool_call.split("\n")
-        gt_tools = [json.loads(tool) for tool in gt_tools]
-    except Exception:
-        return 0.0
+        pd_tools = handler.extract_tool_calls(response)
 
-    # Parse predicted tools
-    try:
-        if "<tool_call>" not in response or "</tool_call>" not in response:
+        if not pd_tools:
             return min_reward
-
-        pd_tool_call = response.split("<tool_call>")[1].split("</tool_call>")[0].strip()
-        pd_tools = pd_tool_call.split("\n")
-        pd_tools = [json.loads(tool) for tool in pd_tools]
 
         return compute_tool_call_reward(gt_tools, pd_tools, max_reward, min_reward)
     except Exception:
         return min_reward
 
 
-def compute_length_reward(response, max_reward=1.0, min_reward=0.0, max_words=512):
+def compute_length_reward(response, max_reward=1.0, min_reward=0.0, max_words=512, format_type="auto"):
     """
-    Reward longer reasoning in <think> tags.
+    Reward longer reasoning in thinking sections.
+
+    Supports both XML (<think>) and GPT OSS (<|channel|>analysis) formats.
 
     Args:
         response: Model output string
         max_reward: Maximum reward for optimal length
         min_reward: Minimum reward for short/missing reasoning
         max_words: Target word count for maximum reward
+        format_type: Response format ("xml", "gpt_oss", or "auto")
 
     Returns:
         float: Length reward score
     """
-    if "<think>" not in response or "</think>" not in response:
+    # Auto-detect format if needed
+    if format_type == "auto":
+        format_type = detect_format(response)
+
+    handler = get_format_handler(format_type)
+
+    # Extract thinking content
+    think_content, success = handler.extract_thinking(response)
+
+    if not think_content:
         return min_reward
 
-    think_content = response.split("<think>")[-1].split("</think>")[0].strip()
     word_count = len(think_content.split())
 
     # Linear scaling up to max_words
@@ -229,39 +220,31 @@ def compute_length_reward(response, max_reward=1.0, min_reward=0.0, max_words=51
     return reward_ratio * (max_reward - min_reward) + min_reward
 
 
-def extract_assistant_response(solution_str, model_type="auto"):
+def extract_assistant_response(solution_str, model_type="auto", format_type="auto"):
     """
     Extract assistant response from chat template.
 
     Supports:
     - Llama format: <|start_header_id|>assistant<|end_header_id|>...<|eot_id|>
     - Qwen format: <|im_start|>assistant...<|im_end|>
+    - GPT OSS format: <|start|>assistant...<|end|>/<|return|>/<|call|>
     - Raw format: Direct response without chat template
 
     Args:
         solution_str: Full model output including chat template
         model_type: Model type ("llama", "qwen", or "auto" for detection)
+        format_type: Response format ("xml", "gpt_oss", or "auto")
 
     Returns:
         str: Extracted assistant response
     """
-    # Auto-detect model type
-    if model_type == "auto":
-        if "<|start_header_id|>assistant<|end_header_id|>" in solution_str:
-            model_type = "llama"
-        elif "<|im_start|>assistant" in solution_str:
-            model_type = "qwen"
-        else:
-            # Assume raw format
-            return solution_str.strip()
+    # Auto-detect format if needed
+    if format_type == "auto":
+        format_type = detect_format(solution_str)
 
-    # Extract based on model type
-    if model_type == "llama":
-        return solution_str.split("<|start_header_id|>assistant<|end_header_id|>")[-1].split("<|eot_id|>")[0].strip()
-    elif model_type == "qwen":
-        return solution_str.split("<|im_start|>assistant")[-1].split("<|im_end|>")[0].strip()
-    else:
-        return solution_str.strip()
+    # Use format handler for extraction
+    handler = get_format_handler(format_type)
+    return handler.extract_assistant_response(solution_str, model_type)
 
 
 def compute_score(
@@ -270,15 +253,18 @@ def compute_score(
     step: int = 0,
     model_type: str = "auto",
     enable_length_reward: bool = False,
+    format_type: str = "auto",
     **kwargs
 ) -> dict:
     """
     Compute ToolRL reward score for tool learning tasks.
 
     This function evaluates model outputs on three components:
-    1. Format: XML-like structure validation
+    1. Format: Structure validation (XML tags or GPT OSS channels)
     2. Correctness: Tool name and parameter matching
-    3. Length (optional): Reasoning length in <think> tags
+    3. Length (optional): Reasoning length in thinking sections
+
+    Supports both XML and GPT OSS formats with automatic detection.
 
     Args:
         model_output: Full model output string (may include chat template)
@@ -286,6 +272,7 @@ def compute_score(
         step: Training step number (for dynamic reward scaling, not used here)
         model_type: Model type for response extraction ("llama", "qwen", "auto")
         enable_length_reward: Whether to include length reward component
+        format_type: Response format ("xml", "gpt_oss", or "auto" for auto-detection)
         **kwargs: Additional arguments (ignored)
 
     Returns:
@@ -294,22 +281,37 @@ def compute_score(
             - reward_fmt: Format reward (0 to 1)
             - reward_correct: Correctness reward (-3 to 3)
             - reward_length: Length reward (0 to 1, if enabled)
-            - reward_think: Binary indicator if <think> tags present
-    """
-    # Extract assistant response
-    response = extract_assistant_response(model_output, model_type)
+            - reward_think: Binary indicator if thinking section present
 
-    # Compute component scores
-    format_score = compute_format_reward(response, ground_truth, max_reward=1.0, min_reward=0.0)
-    correctness_score = compute_correctness_reward(response, ground_truth, max_reward=3.0, min_reward=-3.0)
+    Examples:
+        XML format:
+        >>> compute_score("<think>reasoning</think>\\n<tool_call>\\n{...}\\n</tool_call>", "...")
+        {'score': 4.0, 'reward_fmt': 1.0, 'reward_correct': 3.0, ...}
+
+        GPT OSS format:
+        >>> compute_score("<|start|>assistant<|channel|>analysis<|message|>reasoning<|end|>...", "...")
+        {'score': 4.0, 'reward_fmt': 1.0, 'reward_correct': 3.0, ...}
+    """
+    # Extract assistant response (format-aware)
+    response = extract_assistant_response(model_output, model_type, format_type)
+
+    # Auto-detect format for scoring if needed
+    if format_type == "auto":
+        format_type = detect_format(response)
+
+    # Compute component scores (all format-aware)
+    format_score = compute_format_reward(response, ground_truth, max_reward=1.0, min_reward=0.0, format_type=format_type)
+    correctness_score = compute_correctness_reward(response, ground_truth, max_reward=3.0, min_reward=-3.0, format_type=format_type)
 
     # Optional length reward
     length_score = 0.0
     if enable_length_reward:
-        length_score = compute_length_reward(response, max_reward=1.0, min_reward=0.0, max_words=512)
+        length_score = compute_length_reward(response, max_reward=1.0, min_reward=0.0, max_words=512, format_type=format_type)
 
-    # Binary indicator for <think> presence
-    think_indicator = 1.0 if "<think>" in response and "</think>" in response else 0.0
+    # Binary indicator for thinking section presence (format-aware)
+    handler = get_format_handler(format_type)
+    think_content, _ = handler.extract_thinking(response)
+    think_indicator = 1.0 if think_content else 0.0
 
     # Total score
     total_score = format_score + correctness_score + length_score

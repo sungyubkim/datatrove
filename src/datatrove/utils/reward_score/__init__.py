@@ -40,7 +40,7 @@ def compute_score(
     ]:
         from . import math
 
-        res = math.compute_score(solution_str, ground_truth)
+        res = math.compute_score(solution_str, ground_truth, **kwargs)
     elif data_source in [
         "rlla",
         "toolrl",
@@ -58,6 +58,8 @@ def compute_score(
             step=kwargs.get("step", 0),
             model_type=kwargs.get("model_type", "auto"),
             enable_length_reward=kwargs.get("enable_length_reward", False),
+            format_type=kwargs.get("format_type", "auto"),
+            **{k: v for k, v in kwargs.items() if k not in ["step", "model_type", "enable_length_reward", "format_type"]}
         )
     elif data_source in ["codecontests", "apps", "codeforces", "taco"]:
         # Code execution scoring requires external sandbox service
