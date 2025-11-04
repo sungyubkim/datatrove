@@ -94,6 +94,8 @@ reward_scoring = [
   "langdetect",    # For IFEval language detection
   "immutabledict", # For IFEval immutable data structures
   "nltk",          # For IFEval sentence/word counting
+  "psutil",        # For CodeV Verilog verification process management
+  "networkx",      # For CodeV Verilog module hierarchy analysis
 ]
 ray = [
   "ray"

@@ -41,6 +41,24 @@ def compute_score(
         from . import math
 
         res = math.compute_score(solution_str, ground_truth)
+    elif data_source in [
+        "rlla",
+        "toolrl",
+        "tool_learning",
+        "toolace",
+        "hammer",
+        "xlam",
+        "sungyub/toolrl-verl",
+    ]:
+        from . import toolrl
+
+        res = toolrl.compute_score(
+            solution_str,
+            ground_truth,
+            step=kwargs.get("step", 0),
+            model_type=kwargs.get("model_type", "auto"),
+            enable_length_reward=kwargs.get("enable_length_reward", False),
+        )
     elif data_source in ["codecontests", "apps", "codeforces", "taco"]:
         # Code execution scoring requires external sandbox service
         if sandbox_fusion_url is None:
@@ -70,6 +88,27 @@ def compute_score(
         res = ifeval.compute_score(
             solution_str,
             ground_truth,
+            **kwargs
+        )
+    elif data_source in ["codev", "sungyub/codev-r1-verl"]:
+        # CodeV Verilog code generation with equivalence checking
+        if sandbox_fusion_url is None:
+            raise ValueError(
+                f"CodeV scoring for {data_source} requires a sandbox_fusion_url for Verilog simulation. "
+                "Please set SANDBOX_FUSION_URL in your configuration to point to a running "
+                "sandbox fusion server (e.g., 'http://localhost:8080/run_code'). "
+                "See documentation: https://github.com/bytedance/SandboxFusion"
+            )
+
+        from . import codev
+
+        res = codev.compute_score(
+            data_source=data_source,
+            solution_str=solution_str,
+            ground_truth=ground_truth,
+            extra_info=extra_info,
+            sandbox_fusion_url=sandbox_fusion_url,
+            concurrent_semaphore=concurrent_semaphore,
             **kwargs
         )
     else:

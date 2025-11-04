@@ -183,7 +183,7 @@ runner = InferenceRunner(
 **Reward Scoring** (`utils/reward_score/`): Evaluation utilities for synthetic data
 - Integrated from VERL project for scoring generated responses
 - Supports multiple dataset types with automatic scoring method selection
-- `default_compute_score()`: Main entry point that routes to appropriate scorer
+- `compute_score()`: Main entry point that routes to appropriate scorer
 
 **Supported Dataset Types:**
 - **Math datasets** (via `math_verify`):
@@ -210,24 +210,54 @@ runner = InferenceRunner(
   - Exact match scoring for question-answering tasks
   - Ground truth must be dict format: `{"target": [answers]}`
 
+- **ToolRL** (via `toolrl`):
+  - `rlla`, `toolrl`, `tool_learning`, `toolace`, `hammer`, `xlam`, `sungyub/toolrl-verl`
+  - Evaluates tool learning tasks with three components:
+    - Format reward: XML-like structure validation (`<think>`, `<tool_call>`, `<response>`)
+    - Correctness reward: Tool name and parameter matching (frequency-based scoring)
+    - Length reward (optional): Reasoning length in `<think>` tags
+  - Supports Llama and Qwen chat templates with auto-detection
+  - No external dependencies required (pure Python)
+  - Returns dict with `score`, `reward_fmt`, `reward_correct`, `reward_length`, `reward_think`
+
+- **CodeV** (via `codev`):
+  - `codev`, `sungyub/codev-r1-verl`
+  - Verilog code generation with equivalence checking
+  - **System Requirements**:
+    - Icarus Verilog (`iverilog`) must be installed:
+      - macOS: `brew install icarus-verilog`
+      - Ubuntu/Debian: `apt-get install iverilog`
+      - Verify: `which iverilog` should return a valid path
+    - Python dependencies: `psutil`, `networkx` (auto-installed with `reward_scoring`)
+  - **External Dependencies**:
+    - Requires Sandbox Fusion server for Verilog simulation
+    - Must set `sandbox_fusion_url` parameter or will raise ValueError
+  - Evaluation process:
+    - Extracts Verilog code from markdown code blocks
+    - Generates automatic testbenches (random + directed tests)
+    - Runs equivalence checking via Sandbox Fusion
+    - Supports multiple ground truth variants per problem
+  - Returns dict with `score`, `reward_fmt`, `reward_think`, verification details
+
 **Installation:**
 ```bash
-pip install -e ".[reward_scoring]"  # Installs math-verify, mathruler, requests
+pip install -e ".[reward_scoring]"  # Installs all reward scoring dependencies
+# For CodeV: Also install Icarus Verilog (see system requirements above)
 ```
 
 **Usage Example:**
 ```python
-from datatrove.utils.reward_score import default_compute_score
+from datatrove.utils.reward_score import compute_score
 
 # Math dataset scoring
-score = default_compute_score(
+score = compute_score(
     data_source="openai/gsm8k",
     solution_str="The answer is 42",
     ground_truth="42"
 )
 
 # Code execution scoring - Python (requires sandbox)
-score = default_compute_score(
+score = compute_score(
     data_source="codecontests",
     solution_str="```python\ndef solution(): return 42\n```",
     ground_truth={"inputs": ["5"], "outputs": ["42"]},
@@ -235,7 +265,7 @@ score = default_compute_score(
 )
 
 # Code execution scoring - C++ (automatic language detection)
-score = default_compute_score(
+score = compute_score(
     data_source="codecontests",
     solution_str="```cpp\n#include <iostream>\nint main() { std::cout << 42; }\n```",
     ground_truth={"inputs": ["5"], "outputs": ["42"]},
@@ -243,10 +273,27 @@ score = default_compute_score(
 )
 
 # Code execution scoring - Java (automatic language detection)
-score = default_compute_score(
+score = compute_score(
     data_source="codecontests",
     solution_str="```java\npublic class Main { public static void main(String[] args) { System.out.println(42); } }\n```",
     ground_truth={"inputs": ["5"], "outputs": ["42"]},
+    sandbox_fusion_url="http://sandbox-server:5000"
+)
+
+# ToolRL scoring - Tool learning tasks
+score = compute_score(
+    data_source="toolrl",
+    solution_str="<think>I need to search for information</think>\n<tool_call>\n{\"name\": \"search\", \"parameters\": {\"query\": \"AI\"}}\n</tool_call>",
+    ground_truth="<think>...</think>\n<tool_call>\n{\"name\": \"search\", \"parameters\": {\"query\": \"AI\"}}\n</tool_call>",
+    model_type="auto",  # Auto-detect chat template (llama/qwen)
+    enable_length_reward=True
+)
+
+# CodeV scoring - Verilog code generation (requires sandbox + iverilog)
+score = compute_score(
+    data_source="codev",
+    solution_str="<think>Creating a simple adder</think>\n<answer>```verilog\nmodule adder(input a, input b, output sum); assign sum = a + b; endmodule\n```</answer>",
+    ground_truth=pickle.dumps({"code": "module adder_gold(input a, input b, output sum); assign sum = a + b; endmodule", ...}),
     sandbox_fusion_url="http://sandbox-server:5000"
 )
 ```
