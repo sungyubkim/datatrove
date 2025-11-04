@@ -75,7 +75,13 @@ def verl_to_document_adapter(
     Returns:
         Dictionary with "text", "id", and "metadata" keys for Document creation
     """
+    import base64
     import json
+
+    # Convert bytes ground_truth to base64 for checkpoint JSON serialization
+    reward_model = data["reward_model"].copy()
+    if "ground_truth" in reward_model and isinstance(reward_model["ground_truth"], bytes):
+        reward_model["ground_truth"] = base64.b64encode(reward_model["ground_truth"]).decode('ascii')
 
     return {
         "text": json.dumps(data["prompt"]),  # Serialize prompt for text field
@@ -83,7 +89,7 @@ def verl_to_document_adapter(
         "metadata": {
             "data_source": data["data_source"],
             "ability": data["ability"],
-            "reward_model": data["reward_model"],
+            "reward_model": reward_model,
             "extra_info": data.get("extra_info", {}),
             "original_prompt": data["prompt"],  # Keep for inference
         },
@@ -248,11 +254,20 @@ def postprocess_and_score(runner: InferenceRunner, document: Document) -> Docume
     Returns:
         Updated document with scoring results (or None to skip saving)
     """
+    import base64
+
     inference_results = document.metadata.get("inference_results", [])
     # Reconstruct objects from checkpoint dictionaries
     inference_results = [reconstruct_inference_result(r) for r in inference_results]
     ground_truth = document.metadata["reward_model"].get("ground_truth", "")
     data_source = document.metadata["data_source"]
+
+    # Decode base64 back to bytes for compute_score (e.g., CodeV requires bytes)
+    if isinstance(ground_truth, str):
+        try:
+            ground_truth = base64.b64decode(ground_truth)
+        except Exception:
+            pass  # Not base64, use as string (e.g., for math/QA datasets)
 
     # Handle different ground truth formats based on dataset type
     # SearchR1 datasets expect dict format: {"target": [answers]}
@@ -375,6 +390,8 @@ def document_to_verl_adapter(document: Document) -> dict:
     Returns:
         Dictionary for parquet row with VERL standard fields only
     """
+    import base64
+
     # Extract inference results
     inference_results = document.metadata.get("inference_results", [])
     # Reconstruct objects from checkpoint dictionaries
@@ -423,12 +440,20 @@ def document_to_verl_adapter(document: Document) -> dict:
         }
     )
 
+    # Restore bytes format for output parquet (maintains original format)
+    reward_model = document.metadata["reward_model"].copy()
+    if "ground_truth" in reward_model and isinstance(reward_model["ground_truth"], str):
+        try:
+            reward_model["ground_truth"] = base64.b64decode(reward_model["ground_truth"])
+        except Exception:
+            pass  # Not base64, keep as-is
+
     return {
         # VERL standard fields (5 required fields only)
         "data_source": document.metadata["data_source"],
         "prompt": document.metadata["original_prompt"],
         "ability": document.metadata["ability"],
-        "reward_model": document.metadata["reward_model"],
+        "reward_model": reward_model,  # Use decoded version with original bytes format
         "extra_info": extra_info,  # All results stored here
     }
 

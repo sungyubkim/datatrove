@@ -150,6 +150,30 @@ class TestXMLFormatHandler:
         reward = handler.compute_format_reward(response, ground_truth, max_reward=1.0, min_reward=0.0)
         assert reward == 0.0
 
+    def test_compute_format_reward_codev_traditional_answer_tag(self, handler):
+        """Should reward CodeV traditional format with <answer> tag."""
+        response = "<think>Let me create an adder</think>\n<answer>```verilog\nmodule adder(input a, input b, output sum); assign sum = a + b; endmodule\n```</answer>"
+        ground_truth = "<think>gt</think>\n<answer>```verilog\nmodule adder_gold(...);\n```</answer>"
+
+        reward = handler.compute_format_reward(response, ground_truth, max_reward=1.0, min_reward=0.0)
+        assert reward == 1.0, "CodeV traditional format (<think> + <answer>) should get full reward"
+
+    def test_compute_format_reward_codev_qwen3_style(self, handler):
+        """Should reward CodeV Qwen3 format without <answer> tag."""
+        response = "<think>Let me create an adder</think>\n```verilog\nmodule adder(input a, input b, output sum); assign sum = a + b; endmodule\n```"
+        ground_truth = "<think>gt</think>\n<answer>```verilog\nmodule adder_gold(...);\n```</answer>"
+
+        reward = handler.compute_format_reward(response, ground_truth, max_reward=1.0, min_reward=0.0)
+        assert reward == 1.0, "CodeV Qwen3 format (<think> + plain text with code) should get full reward"
+
+    def test_compute_format_reward_codev_no_think_tag(self, handler):
+        """Should not reward CodeV format without <think> tag."""
+        response = "<answer>```verilog\nmodule adder(...);\n```</answer>"
+        ground_truth = "<think>gt</think>\n<answer>```verilog\nmodule adder_gold(...);\n```</answer>"
+
+        reward = handler.compute_format_reward(response, ground_truth, max_reward=1.0, min_reward=0.0)
+        assert reward == 0.0, "CodeV format without <think> tag should get zero reward"
+
 
 class TestGPTOSSFormatHandler:
     """Test GPT OSS format handler."""

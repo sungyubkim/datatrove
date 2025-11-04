@@ -244,8 +244,23 @@ class XMLFormatHandler(BaseFormatHandler):
         # Check what components ground truth has
         has_gt_response = "<response>" in ground_truth
         has_gt_tool_call = "<tool_call>" in ground_truth
+        has_gt_answer = "<answer>" in ground_truth
 
-        if has_gt_response and not has_gt_tool_call:
+        if has_gt_answer:
+            # Pattern: <think>...</think>\n<answer>...</answer> (CodeV traditional)
+            # OR: <think>...</think>\n[plain text with code] (CodeV Qwen3)
+            if response.count("<think>") == 1 and response.count("</think>") == 1:
+                # Check if response has <answer> tags (traditional format)
+                if response.count("<answer>") == 1 and response.count("</answer>") == 1:
+                    pattern = r"^<think>.*?</think>\n<answer>.*?</answer>"
+                    if re.search(pattern, response, re.DOTALL):
+                        reward = max_reward
+                # Or allow plain text after </think> (Qwen3 format)
+                elif (response.find("<think>") < response.find("</think>") and
+                      response.strip().startswith("<think>")):
+                    reward = max_reward
+
+        elif has_gt_response and not has_gt_tool_call:
             # Pattern: <think>...</think>\n<response>...</response>
             if (response.count("<think>") == 1 and response.count("</think>") == 1 and
                 response.count("<response>") == 1 and response.count("</response>") == 1):

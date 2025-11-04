@@ -71,11 +71,25 @@ def check_format(output, format_type="auto"):
         # Must have at least final channel (analysis is optional)
         return has_final
     else:
-        # XML format: must have <think>, </think>, <answer>, </answer> in correct order
-        tags = ["<think>", "</think>", "<answer>", "</answer>"]
-        tag_count = [output.count(tag) for tag in tags]
-        positions = [output.find(tag) for tag in tags]
-        return min(tag_count) == max(tag_count) == 1 and positions[0] < positions[1] < positions[2] < positions[3]
+        # XML format: <think> tags are required, <answer> tags are optional (Qwen3 compatibility)
+        # Pattern 1 (traditional): <think>...</think>\n<answer>...</answer>
+        # Pattern 2 (Qwen3): <think>...</think>\n[plain text with code]
+
+        # Must have exactly one pair of <think> tags
+        if output.count("<think>") != 1 or output.count("</think>") != 1:
+            return False
+
+        # Check if has <answer> tags (traditional format)
+        if output.count("<answer>") == 1 and output.count("</answer>") == 1:
+            # Validate tag order: <think>, </think>, <answer>, </answer>
+            tags = ["<think>", "</think>", "<answer>", "</answer>"]
+            positions = [output.find(tag) for tag in tags]
+            return positions[0] < positions[1] < positions[2] < positions[3]
+
+        # Or allow plain text after </think> (Qwen3 format)
+        # Just verify <think> tags are properly positioned
+        return (output.find("<think>") < output.find("</think>") and
+                output.strip().startswith("<think>"))
 
 
 def assemble_verilog_code(golden_code, dut_code, testbench_code):
