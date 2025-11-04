@@ -328,23 +328,33 @@ def compute_score(
                 gt_variant.get('reset_port_polarity_sync', set())
             )
 
-            # Find top modules
+            # Parse golden code
             try:
                 v = eda_tools(quiet=True)
                 golden_top = v.auto_top(golden_code)
+            except Exception as e:
+                logger.error(f"Failed to parse GOLDEN Verilog code: {e}")
+                logger.error(f"Golden code (first 300 chars): {golden_code[:300]!r}...")
+
+                verification_results.append({
+                    "correct": False,
+                    "parse_error": f"Golden code parsing failed: {str(e)}",
+                    "golden_code_preview": golden_code[:200] if golden_code else None,
+                })
+                rewards.append(0.0)
+                continue
+
+            # Parse generated code
+            try:
                 gate_top = v.auto_top(extracted_answer)
             except Exception as e:
-                logger.error(f"Failed to parse Verilog modules: {e}")
-
-                # Log the problematic input for debugging (truncated to 300 chars)
-                logger.error(f"Golden code (first 300 chars): {golden_code[:300]!r}...")
+                logger.error(f"Failed to parse GENERATED Verilog code: {e}")
                 logger.error(f"Extracted answer (first 300 chars): {extracted_answer[:300] if extracted_answer else None!r}...")
 
                 verification_results.append({
                     "correct": False,
-                    "parse_error": str(e),
-                    "golden_code_preview": golden_code[:200] if golden_code else None,
-                    "extracted_answer_preview": extracted_answer[:200] if extracted_answer else None
+                    "parse_error": f"Generated code parsing failed: {str(e)}",
+                    "extracted_answer_preview": extracted_answer[:200] if extracted_answer else None,
                 })
                 rewards.append(0.0)
                 continue
