@@ -213,7 +213,7 @@ runner = InferenceRunner(
   - Ground truth must be dict format: `{"target": [answers]}`
 
 - **ToolRL** (via `toolrl`):
-  - `rlla`, `toolrl`, `tool_learning`, `toolace`, `hammer`, `xlam`, `sungyub/toolrl-verl`
+  - `rlla`, `toolrl`, `tool_learning`, `toolace`, `hammer`, `xlam`, `sungyub/toolrl-verl`, `rlla_gpt`
   - Evaluates tool learning tasks with three components:
     - Format reward: Structure validation for XML (`<think>`, `<tool_call>`, `<response>`) or GPT OSS (`<|channel|>analysis`, `to=functions.X`, `<|channel|>final`) formats
     - Correctness reward: Tool name and parameter matching (frequency-based scoring)
@@ -225,7 +225,15 @@ runner = InferenceRunner(
   - Supports Llama, Qwen, and GPT OSS chat templates with auto-detection
   - No external dependencies required (pure Python)
   - Returns dict with `score`, `reward_fmt`, `reward_correct`, `reward_length`, `reward_think`
-  - **Note**: `toolrl_gpt_oss.py` is deprecated - use unified `toolrl.py` with `format_type="gpt_oss"` or `"auto"`
+  - **Environment Variables (VERL Compatibility)**:
+    - `WITHLENGTH=1`: Auto-enable length reward component
+    - `CORRECTMAX1=1`: Set correctness max reward to 1 (default: 3)
+    - `SCHEDULEREWARD=1`: Apply step-based reward scaling
+    - `SCHEDULELENGTH=1`: Dynamic length threshold scaling
+    - `REFINEDREWARD=1`: Strict exact matching (no partial credit)
+    - `COARSEREWARD=1`: Binary match/no-match scoring
+    - `INTERMEDIATEREWARD=1`: Simplified intermediate scoring
+  - **Migration Note**: `toolrl_gpt_oss.py` has been removed. Use unified `toolrl.py` with `format_type="gpt_oss"` or `"auto"`
 
 - **CodeV** (via `codev`):
   - `codev`, `sungyub/codev-r1-verl`

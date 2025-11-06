@@ -1,7 +1,9 @@
 import regex as re
 import ast
 import json
+import os
 from typing import Tuple, Optional, List, Any, Union, Dict
+from collections import Counter
 
 from .format_handlers import detect_format, get_format_handler
 
@@ -383,3 +385,75 @@ def compare_sets_unordered(pred: List, gt: List, normalize: bool = True) -> floa
     union = pred_set | gt_set
 
     return len(intersection) / len(union) if union else 1.0
+
+
+def match_score(list1: List, list2: List, strict: bool = False) -> float:
+    """
+    Compute a similarity score considering element frequency, ignoring order.
+
+    Used by ToolRL for comparing tool calls and parameters.
+    Supports strict matching mode for REFINEDREWARD environment variable.
+
+    Args:
+        list1: First list of elements
+        list2: Second list of elements
+        strict: If True, return 0.0 for any mismatch (REFINEDREWARD mode)
+
+    Returns:
+        float: Similarity score between 0.0 and 1.0
+
+    Examples:
+        >>> match_score(['a', 'b', 'c'], ['a', 'b', 'c'])
+        1.0
+
+        >>> match_score(['a', 'b'], ['b', 'c'])
+        0.5
+
+        >>> match_score(['a', 'b'], ['c', 'd'], strict=True)
+        0.0
+    """
+    if list1 == list2:
+        return 1.0
+
+    # Strict matching mode (REFINEDREWARD)
+    if strict or os.getenv("REFINEDREWARD", "0") == "1":
+        return 0.0 if list1 != list2 else 1.0
+
+    if not list1 or not list2:
+        return 0.0
+
+    count1 = Counter(list1)
+    count2 = Counter(list2)
+
+    intersection = sum(min(count1[k], count2[k]) for k in count1.keys() & count2.keys())
+    max_possible = len(list1) + len(list2) - intersection
+
+    return intersection / max_possible if max_possible > 0 else 0.0
+
+
+def get_env_bool(key: str, default: bool = False) -> bool:
+    """
+    Get boolean value from environment variable.
+
+    Supports common boolean representations: "1"/"0", "true"/"false", "yes"/"no".
+
+    Args:
+        key: Environment variable name
+        default: Default value if not set
+
+    Returns:
+        bool: Boolean value from environment
+
+    Examples:
+        >>> os.environ["TEST_VAR"] = "1"
+        >>> get_env_bool("TEST_VAR")
+        True
+
+        >>> get_env_bool("MISSING_VAR", default=False)
+        False
+    """
+    value = os.getenv(key)
+    if value is None:
+        return default
+
+    return value.lower() in ("1", "true", "yes", "on")

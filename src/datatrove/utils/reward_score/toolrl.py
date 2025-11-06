@@ -22,32 +22,7 @@ import os
 from collections import Counter
 
 from .format_handlers import detect_format, get_format_handler
-
-
-def match_score(list1, list2):
-    """
-    Compute a similarity score considering element frequency, ignoring order.
-
-    Args:
-        list1: First list of elements
-        list2: Second list of elements
-
-    Returns:
-        float: Similarity score between 0.0 and 1.0
-    """
-    if list1 == list2:
-        return 1.0
-
-    if not list1 or not list2:
-        return 0.0
-
-    count1 = Counter(list1)
-    count2 = Counter(list2)
-
-    intersection = sum(min(count1[k], count2[k]) for k in count1.keys() & count2.keys())
-    max_possible = len(list1) + len(list2) - intersection
-
-    return intersection / max_possible if max_possible > 0 else 0.0
+from .utils import match_score, get_env_bool
 
 
 def compute_format_reward(response, answer, max_reward=1.0, min_reward=0.0, format_type="auto"):
@@ -85,6 +60,11 @@ def compute_tool_call_reward(gt_tools, pd_tools, max_reward=3.0, min_reward=-3.0
     - Parameter key matching (frequency-based)
     - Parameter value matching (exact match)
 
+    Supports environment variables:
+    - COARSEREWARD=1: Binary matching (all or nothing)
+    - INTERMEDIATEREWARD=1: Simplified intermediate scoring
+    - REFINEDREWARD=1: Strict exact matching (via match_score)
+
     Args:
         gt_tools: List of ground truth tool dicts with "name" and "parameters"
         pd_tools: List of predicted tool dicts with "name" and "parameters"
@@ -97,6 +77,10 @@ def compute_tool_call_reward(gt_tools, pd_tools, max_reward=3.0, min_reward=-3.0
     if gt_tools == pd_tools:
         return max_reward
 
+    # COARSEREWARD: Binary matching
+    if get_env_bool("COARSEREWARD"):
+        return min_reward if gt_tools != pd_tools else max_reward
+
     # Score tool name matching
     gt_names = [tool["name"] for tool in gt_tools]
     pd_names = [tool["name"] for tool in pd_tools]
@@ -105,12 +89,20 @@ def compute_tool_call_reward(gt_tools, pd_tools, max_reward=3.0, min_reward=-3.0
     local_max_possible = 1.0
     used_pd_indices = set()
 
+    # INTERMEDIATEREWARD: Simplified scoring
+    intermediate_mode = get_env_bool("INTERMEDIATEREWARD")
+
     # Match each gt_tool to best pd_tool
     for gt_tool in gt_tools:
         gt_name = gt_tool["name"]
         gt_params = gt_tool["parameters"]
 
-        local_max_possible += 1.0 + len(gt_params)
+        if intermediate_mode:
+            # Simplified: only count exact tool matches
+            local_max_possible += 1.0
+        else:
+            # Full: count parameters too
+            local_max_possible += 1.0 + len(gt_params)
 
         best_match_score = 0.0
         best_match_index = -1
@@ -119,22 +111,30 @@ def compute_tool_call_reward(gt_tools, pd_tools, max_reward=3.0, min_reward=-3.0
             if i in used_pd_indices or pd_tool["name"] != gt_name:
                 continue
 
-            pd_params = pd_tool["parameters"]
+            if intermediate_mode:
+                # Simplified: only check exact match
+                if gt_tool == pd_tool:
+                    best_match_score = 1.0
+                    best_match_index = i
+                    break
+            else:
+                # Full: score parameters
+                pd_params = pd_tool["parameters"]
 
-            # Score parameter keys
-            param_score = match_score(list(gt_params.keys()), list(pd_params.keys()))
+                # Score parameter keys
+                param_score = match_score(list(gt_params.keys()), list(pd_params.keys()))
 
-            # Score parameter values
-            correctness_score = sum(
-                1.0 for k, v in gt_params.items()
-                if k in pd_params and pd_params[k] == v
-            )
+                # Score parameter values
+                correctness_score = sum(
+                    1.0 for k, v in gt_params.items()
+                    if k in pd_params and pd_params[k] == v
+                )
 
-            total_score = param_score + correctness_score
+                total_score = param_score + correctness_score
 
-            if total_score > best_match_score:
-                best_match_score = total_score
-                best_match_index = i
+                if total_score > best_match_score:
+                    best_match_score = total_score
+                    best_match_index = i
 
         if best_match_index != -1:
             used_pd_indices.add(best_match_index)
@@ -266,10 +266,18 @@ def compute_score(
 
     Supports both XML and GPT OSS formats with automatic detection.
 
+    Environment variables (VERL compatibility):
+    - WITHLENGTH=1: Auto-enable length reward
+    - CORRECTMAX1=1: Set correctness max reward to 1 (default: 3)
+    - SCHEDULEREWARD=1: Apply step-based reward scaling
+    - REFINEDREWARD=1: Strict exact matching (no partial credit)
+    - COARSEREWARD=1: Binary match/no-match scoring
+    - INTERMEDIATEREWARD=1: Simplified intermediate scoring
+
     Args:
         model_output: Full model output string (may include chat template)
         ground_truth: Expected output from reward_model.ground_truth
-        step: Training step number (for dynamic reward scaling, not used here)
+        step: Training step number (for dynamic reward scaling)
         model_type: Model type for response extraction ("llama", "qwen", "auto")
         enable_length_reward: Whether to include length reward component
         format_type: Response format ("xml", "gpt_oss", or "auto" for auto-detection)
@@ -279,7 +287,7 @@ def compute_score(
         dict: Reward scores with keys:
             - score: Total reward (sum of all components)
             - reward_fmt: Format reward (0 to 1)
-            - reward_correct: Correctness reward (-3 to 3)
+            - reward_correct: Correctness reward (-3 to 3, or -1 to 1 if CORRECTMAX1=1)
             - reward_length: Length reward (0 to 1, if enabled)
             - reward_think: Binary indicator if thinking section present
 
@@ -292,6 +300,44 @@ def compute_score(
         >>> compute_score("<|start|>assistant<|channel|>analysis<|message|>reasoning<|end|>...", "...")
         {'score': 4.0, 'reward_fmt': 1.0, 'reward_correct': 3.0, ...}
     """
+    # Check environment variables
+    if get_env_bool("WITHLENGTH"):
+        enable_length_reward = True
+
+    # Set reward ranges based on environment
+    if get_env_bool("CORRECTMAX1"):
+        tool_max = 1.0
+        tool_min = -1.0
+    else:
+        tool_max = 3.0
+        tool_min = -3.0
+
+    format_max = 1.0
+    format_min = 0.0
+    length_max = 1.0
+    length_min = 0.0
+
+    # Apply SCHEDULEREWARD if enabled
+    if get_env_bool("SCHEDULEREWARD"):
+        # Reward scheduling based on step
+        # Format: gradually reduce range as training progresses
+        format_max = 2.0 - (2.0 - 1.0) * min(step / 150.0, 1.0)
+        format_min = -2.0 + (2.0 - 0.0) * min(step / 150.0, 1.0)
+        if format_max < 1.0:
+            format_max = 1.0
+        if format_min > -1.0:
+            format_min = -1.0
+
+        # Correctness: gradually increase range as training progresses
+        scheduled_tool_max = (tool_max - 2.0) * min(step / 150.0, 1.0) + 2.0
+        scheduled_tool_min = (tool_min + 2.0) * min(step / 150.0, 1.0) - 2.0
+        if scheduled_tool_max > tool_max:
+            scheduled_tool_max = tool_max
+        if scheduled_tool_min < tool_min:
+            scheduled_tool_min = tool_min
+        tool_max = scheduled_tool_max
+        tool_min = scheduled_tool_min
+
     # Extract assistant response (format-aware)
     response = extract_assistant_response(model_output, model_type, format_type)
 
@@ -300,13 +346,19 @@ def compute_score(
         format_type = detect_format(response)
 
     # Compute component scores (all format-aware)
-    format_score = compute_format_reward(response, ground_truth, max_reward=1.0, min_reward=0.0, format_type=format_type)
-    correctness_score = compute_correctness_reward(response, ground_truth, max_reward=3.0, min_reward=-3.0, format_type=format_type)
+    format_score = compute_format_reward(response, ground_truth, max_reward=format_max, min_reward=format_min, format_type=format_type)
+    correctness_score = compute_correctness_reward(response, ground_truth, max_reward=tool_max, min_reward=tool_min, format_type=format_type)
 
     # Optional length reward
     length_score = 0.0
     if enable_length_reward:
-        length_score = compute_length_reward(response, max_reward=1.0, min_reward=0.0, max_words=512, format_type=format_type)
+        # SCHEDULELENGTH: Dynamic max words threshold
+        if get_env_bool("SCHEDULELENGTH"):
+            max_words = int((640 - 384) * min(step / 105.0, 1.0) + 384)
+        else:
+            max_words = 512
+
+        length_score = compute_length_reward(response, max_reward=length_max, min_reward=length_min, max_words=max_words, format_type=format_type)
 
     # Binary indicator for thinking section presence (format-aware)
     handler = get_format_handler(format_type)
