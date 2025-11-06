@@ -63,7 +63,8 @@ def compute_score(
 
         # Extract answers (supports \\boxed{}, <response>, <|channel|>final, etc.)
         pred_parsed, pred_type = parse_answer(pred, format_type=format_type)
-        gt_parsed, gt_type = parse_answer(ground_truth, format_type=format_type)
+        # Ground truth should always be auto-detected, not forced to match model format
+        gt_parsed, gt_type = parse_answer(ground_truth, format_type="auto")
 
         # Give format reward based on whether prediction matches expected format
         # Format types must match exactly to encourage consistent formatting

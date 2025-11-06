@@ -865,6 +865,7 @@ name = "datatrove"
 version = "0.6.0"
 source = { editable = "." }
 dependencies = [
+    { name = "datasets" },
     { name = "dill" },
     { name = "fsspec" },
     { name = "huggingface-hub" },
@@ -873,6 +874,8 @@ dependencies = [
     { name = "multiprocess" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.3.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "rouge-score" },
+    { name = "sacrebleu" },
     { name = "tqdm" },
 ]
 
@@ -1085,6 +1088,7 @@ testing = [
 requires-dist = [
     { name = "aiofiles", marker = "extra == 'inference'" },
     { name = "botok", marker = "extra == 'multilingual'" },
+    { name = "datasets", specifier = ">=4.3.0" },
     { name = "datasets", marker = "extra == 'io'", specifier = ">=3.1.0" },
     { name = "datatrove", extras = ["all"], marker = "extra == 'dev'" },
     { name = "datatrove", extras = ["cli"], marker = "extra == 'testing'" },
@@ -1141,8 +1145,10 @@ requires-dist = [
     { name = "regex", marker = "extra == 'processing'" },
     { name = "requests", marker = "extra == 'reward-scoring'" },
     { name = "rich", marker = "extra == 'cli'" },
+    { name = "rouge-score", specifier = ">=0.1.2" },
     { name = "ruff", marker = "extra == 'quality'", specifier = ">=0.1.5" },
     { name = "s3fs", marker = "extra == 's3'", specifier = ">=2023.12.2" },
+    { name = "sacrebleu", specifier = ">=2.5.1" },
     { name = "spacy", extras = ["ja"], marker = "extra == 'multilingual'", specifier = ">=3.8" },
     { name = "spacy", extras = ["ja"], marker = "extra == 'testing'" },
     { name = "stanza", marker = "extra == 'multilingual'" },

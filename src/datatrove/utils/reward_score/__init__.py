@@ -113,6 +113,98 @@ def compute_score(
             concurrent_semaphore=concurrent_semaphore,
             **kwargs
         )
+    elif data_source in ['hitab', 'multihier', 'finqa']:
+        # Table reasoning with boxed answer format (Guru datasets)
+        from . import table_boxed
+
+        res = table_boxed.compute_score(
+            model_output=solution_str,
+            ground_truth=ground_truth,
+            data_source=data_source,
+            **kwargs
+        )
+    elif data_source in ['WTQ', 'HiTab']:
+        # Table QA: WikiTableQuestions, HiTab (JSON list answers)
+        from . import tqa
+
+        res = tqa.compute_score(
+            predict_str=solution_str,
+            ground_truth=ground_truth,
+            data_source=data_source,
+            **kwargs
+        )
+    elif data_source in ['TabFact']:
+        # Table Fact Verification (binary: entailed/refuted)
+        from . import tfv
+
+        res = tfv.compute_score(
+            predict_str=solution_str,
+            ground_truth=ground_truth,
+            data_source=data_source,
+            **kwargs
+        )
+    elif data_source in ['FeTaQA']:
+        # Free-form Table QA with BLEU/ROUGE scoring
+        from . import ff_tqa
+
+        res = ff_tqa.compute_score(
+            predict_str=solution_str,
+            ground_truth=ground_truth,
+            data_source=data_source,
+            **kwargs
+        )
+    elif "long_toc_choices" in data_source:
+        # Long-context multiple choice QA (A-D)
+        from . import long
+
+        res = long.compute_score(
+            predict_str=solution_str,
+            ground_truth=ground_truth,
+            data_source=data_source,
+            **kwargs
+        )
+    elif "docmath" in data_source:
+        # Document math problems with numeric answers
+        from . import docmath
+
+        res = docmath.compute_score(
+            predict_str=solution_str,
+            ground_truth=ground_truth,
+            data_source=data_source,
+            **kwargs
+        )
+    elif "multihoprag" in data_source or "musique" in data_source:
+        # Document QA with free text answers (EM/F1 scoring)
+        from . import docqa
+
+        res = docqa.compute_score(
+            predict_str=solution_str,
+            ground_truth=ground_truth,
+            data_source=data_source,
+            **kwargs
+        )
+    elif (
+        data_source in [
+            "ordering_puzzle",
+            "zebra_puzzle",
+            "graph_logical",
+            "arcagi1",
+            "arcagi2",
+            "barc",
+        ]
+        or "puzzle" in data_source
+        or "arcagi" in data_source
+        or "barc" in data_source
+    ):
+        # Logic domain scoring: ordering puzzles, zebra puzzles, graph problems, ARC-AGI
+        from . import logic
+
+        res = logic.compute_score(
+            model_output=solution_str,
+            ground_truth=ground_truth,
+            data_source=data_source,
+            **kwargs
+        )
     else:
         raise NotImplementedError(
             f"Reward function is not implemented for {data_source=}"
@@ -134,4 +226,8 @@ def compute_score(
         }
 
 
-__all__ = ["default_compute_score"]
+__all__ = ["compute_score"]
+
+
+# Backward compatibility alias
+default_compute_score = compute_score
