@@ -65,6 +65,68 @@ This design enables:
 | `rlla` | Real-world tool learning | - |
 | `toolace` | Tool ACE benchmark | - |
 | `hammer` | HAMMER tool dataset | - |
+| `rlla_gpt` | GPT-OSS format tool learning | - |
+
+**Environment Variables (VERL Compatibility):**
+
+The ToolRL scorer supports advanced reward shaping through environment variables:
+
+| Variable | Effect | Default |
+|----------|--------|---------|
+| `WITHLENGTH=1` | Auto-enable length reward component | Disabled |
+| `CORRECTMAX1=1` | Set correctness max to 1 (instead of 3) | 3 |
+| `SCHEDULEREWARD=1` | Apply step-based reward scaling | Disabled |
+| `SCHEDULELENGTH=1` | Dynamic length threshold scaling (384-640 words) | Disabled |
+| `REFINEDREWARD=1` | Strict exact matching (no partial credit) | Disabled |
+| `COARSEREWARD=1` | Binary match/no-match scoring | Disabled |
+| `INTERMEDIATEREWARD=1` | Simplified intermediate scoring | Disabled |
+
+**Example:**
+```bash
+export WITHLENGTH=1
+export CORRECTMAX1=1
+python train_verl.py
+```
+
+### Code Execution (`sandbox_fusion/`)
+
+**Scorer**: Multi-language code execution with test case validation
+**Format**: Markdown code blocks with automatic language detection
+**Requires**: SandboxFusion service
+
+**Supported Datasets (17 total):**
+
+| Dataset | Description | Difficulty | Notes |
+|---------|-------------|------------|-------|
+| `codecontests` | Google CodeContests | Mixed | Original benchmark |
+| `apps` | APPS benchmark | Mixed | Original benchmark |
+| `codeforces` | Codeforces problems | Mixed | Original benchmark |
+| `taco` | TACO benchmark | Mixed | Original benchmark |
+| `code-contests-plus` | Enhanced CodeContests | Mixed | Extended version |
+| `kodcode-leetcode` | KodCode LeetCode | Mixed | LeetCode problems |
+| `oss` | AceCode dataset | Mixed | Open source |
+| `rstar-coder` | R* Coder | Mixed | Advanced reasoning |
+| `train-code-leetcode-Easy` | LeetCode Easy | Easy | Training split |
+| `train-code-leetcode-Medium` | LeetCode Medium | Medium | Training split |
+| `train-code-leetcode-Hard` | LeetCode Hard | Hard | Training split |
+| `test-code-leetcode-Medium` | LeetCode Medium Test | Medium | Test split |
+| `train-code-taco-easy` | TACO Easy | Easy | Training split |
+| `train-code-taco-medium` | TACO Medium | Medium | Training split |
+| `train-code-taco-hard` | TACO Hard | Hard | Training split |
+| `train-code-taco-medium_hard` | TACO Medium-Hard | Medium-Hard | Training split |
+| `train-code-taco-very_hard` | TACO Very Hard | Very Hard | Training split |
+| `train-code-taco-unknown_difficulty` | TACO Unknown | Unknown | Training split |
+
+**Supported Languages (30+):**
+- **Primary**: python, cpp, java, go, rust, javascript (nodejs), typescript
+- **Additional**: kotlin, swift, scala, julia, php, perl, ruby, lua, R, bash
+- **Testing Frameworks**: pytest, junit, jest, go_test
+- **Specialized**: csharp, sql, cuda, verilog, lean, racket, D_ut, python_gpu
+
+**Language Auto-Detection:**
+- Automatically detects language from markdown code blocks (e.g., ````cpp`, ````java`)
+- Language mapping: `py3`/`py2`/`python3` → `python`, `c++`/`c++17` → `cpp`
+- Fallback to Python for unsupported languages
 
 ### Code Verification (`codev.py`)
 
@@ -325,6 +387,83 @@ def default_compute_score(
     # ... more routing logic ...
 ```
 
+### 5. Dataset Routing Patterns
+
+The reward scorer supports two types of routing strategies to match dataset identifiers:
+
+**1. Exact Match Routing:**
+Datasets must exactly match the specified string in the routing logic.
+
+```python
+# Examples from __init__.py
+if data_source in ["codecontests", "apps", "codeforces", "taco"]:
+    # Routes to sandbox_fusion scorer
+
+if data_source in ["hitab", "finqa"]:
+    # Routes to table_boxed scorer
+```
+
+**2. Pattern-Based Routing:**
+Datasets are matched using substring patterns, allowing flexible grouping.
+
+```python
+# Examples from __init__.py
+if "gsm8k" in data_source or "math" in data_source.lower():
+    # Routes to math scorer
+    # Matches: "openai/gsm8k", "math_dapo", "Big-Math-RL-Verified", etc.
+
+if "puzzle" in data_source or "arcagi" in data_source:
+    # Routes to logic scorer
+    # Matches: "ordering_puzzle", "zebra_puzzle", "arcagi1", "arcagi2", etc.
+
+if "docmath" in data_source:
+    # Routes to docmath scorer
+    # Matches: "docmath", "docmath_hard", etc.
+```
+
+**Pattern Examples by Domain:**
+
+| Pattern | Matches | Scorer |
+|---------|---------|--------|
+| `"gsm8k" in data_source` | `openai/gsm8k`, `gsm8k_hard` | `math.py` |
+| `"math" in data_source.lower()` | `MATH`, `math_dapo`, `Big-Math-RL-Verified` | `math.py` |
+| `"puzzle" in data_source` | `ordering_puzzle`, `zebra_puzzle` | `logic.py` |
+| `"arcagi" in data_source` | `arcagi1`, `arcagi2` | `logic.py` |
+| `"barc" in data_source` | `barc`, `mini_barc` | `logic.py` |
+| `"docmath" in data_source` | `docmath`, `docmath_hard` | `docmath.py` |
+| `"long_toc_choices" in data_source` | `long_toc_choices`, `long_toc_choices_hard` | `long.py` |
+
+**Adding New Datasets:**
+
+When adding a new dataset, consider which routing strategy fits best:
+
+- **Use Exact Match** when:
+  - Dataset name is unique and unlikely to have variants
+  - You want precise control over routing
+  - Example: `"my_specific_dataset"`
+
+- **Use Pattern Match** when:
+  - Dataset has multiple variants or versions
+  - You want to group related datasets
+  - Dataset name follows a naming convention
+  - Example: `"train-code-*"`, `"*-math-*"`, `"*puzzle*"`
+
+**Example: Adding a New Dataset**
+
+```python
+# In __init__.py
+
+# Option 1: Exact match for specific dataset
+if data_source in ["my_new_dataset", "another_dataset"]:
+    from . import my_scorer
+    return my_scorer.compute_score(...)
+
+# Option 2: Pattern match for dataset family
+if "my_keyword" in data_source:
+    from . import my_scorer
+    return my_scorer.compute_score(...)
+```
+
 ---
 
 ## Usage Examples
@@ -434,10 +573,88 @@ print(result)
 # {'score': 1.0, 'em': 1.0, 'sub_em': 1.0, 'f1': 1.0, ...}
 ```
 
+### Code Execution
+
+```python
+# Example 6: Python code execution (automatic detection)
+model_output = """<think>
+I need to write a function that returns the sum.
+</think>
+```python
+def solution(a, b):
+    return a + b
+```"""
+
+result = default_compute_score(
+    data_source="codecontests",
+    solution_str=model_output,
+    ground_truth={"inputs": ["5\\n3"], "outputs": ["8"]},
+    sandbox_fusion_url="http://sandbox-server:5000"
+)
+
+print(result)
+# {'score': 1.0, 'reward_think': 1.0, 'reward_fmt': 1.0}
+```
+
+```python
+# Example 7: C++ code execution (automatic language detection)
+model_output = """<think>
+I'll implement this in C++ for better performance.
+</think>
+```cpp
+#include <iostream>
+using namespace std;
+int main() {
+    int a, b;
+    cin >> a >> b;
+    cout << a + b << endl;
+    return 0;
+}
+```"""
+
+result = default_compute_score(
+    data_source="train-code-leetcode-Medium",
+    solution_str=model_output,
+    ground_truth={"inputs": ["5 3"], "outputs": ["8"]},
+    sandbox_fusion_url="http://sandbox-server:5000"
+)
+
+print(result)
+# {'score': 1.0, 'reward_think': 1.0, 'reward_fmt': 1.0}
+```
+
+```python
+# Example 8: Java code execution (automatic language detection)
+model_output = """<think>
+I'll solve this using Java.
+</think>
+```java
+import java.util.Scanner;
+public class Main {
+    public static void main(String[] args) {
+        Scanner sc = new Scanner(System.in);
+        int a = sc.nextInt();
+        int b = sc.nextInt();
+        System.out.println(a + b);
+    }
+}
+```"""
+
+result = default_compute_score(
+    data_source="train-code-taco-medium",
+    solution_str=model_output,
+    ground_truth={"inputs": ["5 3"], "outputs": ["8"]},
+    sandbox_fusion_url="http://sandbox-server:5000"
+)
+
+print(result)
+# {'score': 1.0, 'reward_think': 1.0, 'reward_fmt': 1.0}
+```
+
 ### Batch Processing
 
 ```python
-# Example 6: Evaluate multiple samples
+# Example 9: Evaluate multiple samples
 samples = [
     {"data_source": "openai/gsm8k", "output": "...", "ground_truth": "42"},
     {"data_source": "WTQ", "output": "...", "ground_truth": ["Paris"]},
@@ -1153,6 +1370,47 @@ pytest tests/utils/reward_score/test_gpt_oss_all_scorers.py -v
 # Run with coverage
 pytest tests/utils/reward_score/ --cov=datatrove.utils.reward_score --cov-report=html
 ```
+
+### Validation Scripts
+
+Two utility scripts are provided for validating dataset coverage and testing scorer routing:
+
+**1. Dataset Coverage Validator** (`scripts/check_dataset_coverage.py`):
+- Validates all HuggingFace Hub datasets against the reward scorer router
+- Identifies covered/uncovered datasets
+- Supports pattern-based matching
+- Exits with error if uncovered datasets are found
+
+```bash
+# Check default username (sungyub)
+python scripts/check_dataset_coverage.py
+
+# Check specific username
+python scripts/check_dataset_coverage.py --username your_username
+
+# Check with detailed output
+python scripts/check_dataset_coverage.py --verbose
+```
+
+**2. Scoring System Tester** (`scripts/test_scoring.py`):
+- Smoke tests for reward scoring system
+- Tests math, ToolRL, and code domains
+- Validates router dispatching works correctly
+- Includes dry-run validation for code scoring (checks sandbox requirement)
+
+```bash
+# Run all smoke tests
+python scripts/test_scoring.py
+
+# Run with verbose output
+python scripts/test_scoring.py --verbose
+```
+
+**Use Cases:**
+- Ensure completeness when adding new datasets to HuggingFace Hub
+- Quick validation of scoring system after code changes
+- CI/CD integration for automated validation
+- Debug routing issues with new dataset identifiers
 
 ### Test Organization
 
