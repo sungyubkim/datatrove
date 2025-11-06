@@ -37,6 +37,20 @@ def compute_score(
         "math_dapo",
         "math",
         "math_dapo_reasoning",
+        # Additional math datasets
+        "Big-Math-RL-Verified",
+        "DAPO-Math-17K",
+        "DeepScaleR-Preview",
+        "MathX-5M",
+        "OpenR1-Math-220k",
+        "orz-math-72k",
+        "train-math-deepscaler",
+        "train-math-numinamath1.5_amc_aime",
+        "train-math-numinamath1.5_aops_forum",
+        "train-math-numinamath1.5_cn_contest",
+        "train-math-numinamath1.5_olympiads",
+        "train-math-numinamath1.5_olympiads_ref",
+        "train-math-still3",
     ]:
         from . import math
 
@@ -49,6 +63,7 @@ def compute_score(
         "hammer",
         "xlam",
         "sungyub/toolrl-verl",
+        "rlla_gpt",  # GPT-OSS format ToolRL
     ]:
         from . import toolrl
 
@@ -61,7 +76,27 @@ def compute_score(
             format_type=kwargs.get("format_type", "auto"),
             **{k: v for k, v in kwargs.items() if k not in ["step", "model_type", "enable_length_reward", "format_type"]}
         )
-    elif data_source in ["codecontests", "apps", "codeforces", "taco"]:
+    elif data_source in [
+        "codecontests",
+        "apps",
+        "codeforces",
+        "taco",
+        # Additional code execution datasets
+        "code-contests-plus",
+        "kodcode-leetcode",
+        "oss",  # AceCode
+        "rstar-coder",
+        "train-code-leetcode-Easy",
+        "train-code-leetcode-Medium",
+        "train-code-leetcode-Hard",
+        "test-code-leetcode-Medium",
+        "train-code-taco-easy",
+        "train-code-taco-medium",
+        "train-code-taco-hard",
+        "train-code-taco-medium_hard",
+        "train-code-taco-very_hard",
+        "train-code-taco-unknown_difficulty",
+    ]:
         # Code execution scoring requires external sandbox service
         if sandbox_fusion_url is None:
             raise ValueError(
