@@ -79,8 +79,10 @@ def verl_to_document_adapter(
     import json
 
     # Convert bytes ground_truth to base64 for checkpoint JSON serialization
+    # Note: New JSON format datasets (e.g., codev) already have string ground_truth, no conversion needed
     reward_model = data["reward_model"].copy()
     if "ground_truth" in reward_model and isinstance(reward_model["ground_truth"], bytes):
+        # Legacy format: pickle bytes → base64 string for JSON compatibility
         reward_model["ground_truth"] = base64.b64encode(reward_model["ground_truth"]).decode('ascii')
 
     return {
@@ -262,12 +264,15 @@ def postprocess_and_score(runner: InferenceRunner, document: Document) -> Docume
     ground_truth = document.metadata["reward_model"].get("ground_truth", "")
     data_source = document.metadata["data_source"]
 
-    # Decode base64 back to bytes for compute_score (e.g., CodeV requires bytes)
+    # Handle different ground truth formats:
+    # - Legacy pickle format: base64 string → decode to bytes
+    # - New JSON format: plain string → keep as-is (e.g., codev JSON)
+    # - Math/QA datasets: plain string → keep as-is
     if isinstance(ground_truth, str):
         try:
-            ground_truth = base64.b64decode(ground_truth)
+            ground_truth = base64.b64decode(ground_truth)  # Try decoding base64
         except Exception:
-            pass  # Not base64, use as string (e.g., for math/QA datasets)
+            pass  # Not base64, use as string (JSON or plain text)
 
     # Handle different ground truth formats based on dataset type
     # SearchR1 datasets expect dict format: {"target": [answers]}
@@ -440,13 +445,15 @@ def document_to_verl_adapter(document: Document) -> dict:
         }
     )
 
-    # Restore bytes format for output parquet (maintains original format)
+    # Handle output ground_truth format:
+    # - Legacy format: base64 string → decode back to bytes for parquet
+    # - New JSON format: keep as string (no base64 encoding)
     reward_model = document.metadata["reward_model"].copy()
     if "ground_truth" in reward_model and isinstance(reward_model["ground_truth"], str):
         try:
             reward_model["ground_truth"] = base64.b64decode(reward_model["ground_truth"])
         except Exception:
-            pass  # Not base64, keep as-is
+            pass  # Not base64 (e.g., JSON string), keep as-is
 
     return {
         # VERL standard fields (5 required fields only)

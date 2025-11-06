@@ -275,8 +275,27 @@ def compute_score(
         dict: Score dictionary with 'score', 'reward_fmt', 'reward_think' keys
     """
     try:
-        # Unpickle ground truth
-        gts = pickle.loads(ground_truth)
+        # Parse ground truth from JSON or pickle (backward compatibility)
+        if isinstance(ground_truth, bytes):
+            # Legacy format: pickled bytes
+            gts = pickle.loads(ground_truth)
+        elif isinstance(ground_truth, str):
+            # New format: JSON string
+            gts = json.loads(ground_truth)
+            # Convert lists back to sets for port info (JSON doesn't support sets or tuples)
+            for variant in gts.values():
+                if isinstance(variant, dict):
+                    for key in ['input_port_width', 'output_port_width',
+                               'clock_port_polarity', 'reset_port_polarity_sync']:
+                        if key in variant and isinstance(variant[key], list):
+                            # Convert inner lists to tuples, then create set
+                            # Original: {('port', width), ...} → JSON: [['port', width], ...] → Back: {('port', width), ...}
+                            variant[key] = set(
+                                tuple(item) if isinstance(item, list) else item
+                                for item in variant[key]
+                            )
+        else:
+            raise ValueError(f"Unexpected ground_truth type: {type(ground_truth)}")
 
         # Extract assistant response from chat template wrapper (format-aware)
         # This handles Llama, Qwen, GPT OSS, and raw formats

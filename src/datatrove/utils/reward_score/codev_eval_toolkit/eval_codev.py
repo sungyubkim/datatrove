@@ -101,6 +101,25 @@ def verify_one_sample_wrapper(args):
         return queue.get()
 
 
+def _extract_module_blocks(code):
+    """Extract only module...endmodule blocks from code, removing explanatory text."""
+    # Remove comments first
+    note_pattern = r"(//[^\n]*|/\*[\s\S]*?\*/)"
+    code = re.sub(note_pattern, "", code)
+
+    # Extract all module...endmodule blocks
+    # Pattern matches: module <name> ... endmodule
+    module_pattern = r"module\s+[a-zA-Z_][a-zA-Z0-9_$]*.*?endmodule"
+    modules = re.findall(module_pattern, code, re.DOTALL)
+
+    if modules:
+        # Return all modules joined with double newline
+        return "\n\n".join(modules)
+
+    # If no match, return original (might have valid module but complex syntax)
+    return code
+
+
 def extract_verilog(verilog_code):
     # Try multiple markdown formats
     patterns = [
@@ -113,13 +132,15 @@ def extract_verilog(verilog_code):
     for pattern in patterns:
         matches = re.findall(pattern, verilog_code)
         if matches:
-            return matches[-1]
+            extracted = matches[-1]
+            # Clean: extract only module...endmodule blocks
+            return _extract_module_blocks(extracted)
 
     # Fallback: Extract plain text with module keyword (Qwen3 format)
     if "module" in verilog_code and "endmodule" in verilog_code:
         # Remove <think> and <answer> tags if present
         cleaned = re.sub(r"<think>.*?</think>", "", verilog_code, flags=re.DOTALL)
         cleaned = re.sub(r"</?answer>", "", cleaned)
-        return cleaned.strip()
+        return _extract_module_blocks(cleaned.strip())
 
     return None

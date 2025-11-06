@@ -331,10 +331,17 @@ score = compute_score(
 )
 
 # CodeV scoring - Verilog code generation (XML format, requires sandbox + iverilog)
+# Note: New JSON format (recommended). Legacy pickle bytes format is still supported for backward compatibility.
 score = compute_score(
     data_source="codev",
     solution_str="<think>Creating a simple adder</think>\n<answer>```verilog\nmodule adder(input a, input b, output sum); assign sum = a + b; endmodule\n```</answer>",
-    ground_truth=pickle.dumps({"code": "module adder_gold(input a, input b, output sum); assign sum = a + b; endmodule", ...}),
+    ground_truth=json.dumps({
+        "code": "module adder_gold(input a, input b, output sum); assign sum = a + b; endmodule",
+        "input_port_width": [1, 1],  # Port widths as lists (JSON compatible)
+        "output_port_width": [1],
+        "clock_port_polarity": [],
+        "reset_port_polarity_sync": []
+    }),
     sandbox_fusion_url="http://sandbox-server:5000",
     format_type="auto"
 )
@@ -348,7 +355,13 @@ score = compute_score(
         "module adder(input a, input b, output sum); assign sum = a + b; endmodule\n"
         "```<|return|>"
     ),
-    ground_truth=pickle.dumps({"code": "module adder_gold(input a, input b, output sum); assign sum = a + b; endmodule", ...}),
+    ground_truth=json.dumps({
+        "code": "module adder_gold(input a, input b, output sum); assign sum = a + b; endmodule",
+        "input_port_width": [1, 1],
+        "output_port_width": [1],
+        "clock_port_polarity": [],
+        "reset_port_polarity_sync": []
+    }),
     sandbox_fusion_url="http://sandbox-server:5000",
     format_type="gpt_oss"
 )
