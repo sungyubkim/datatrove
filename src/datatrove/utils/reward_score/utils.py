@@ -1,5 +1,7 @@
 import regex as re
-from typing import Tuple, Optional
+import ast
+import json
+from typing import Tuple, Optional, List, Any, Union, Dict
 
 from .format_handlers import detect_format, get_format_handler
 
@@ -113,6 +115,52 @@ def parse_answer(text: str, format_type: str = "auto") -> Tuple[str, int]:
     return text, -1
 
 
+def normalize_ground_truth(
+    ground_truth: Union[str, Dict, List],
+    key: str = "answer"
+) -> Any:
+    """
+    Normalize ground truth from various formats to a single value.
+
+    Handles common ground truth formats across different scorers:
+    - Dict with key: {"answer": "value"} → "value"
+    - List with single element: ["value"] → "value"
+    - List with dict: [{"answer": "value"}] → "value"
+    - Plain value: "value" → "value"
+
+    Args:
+        ground_truth: Ground truth in any supported format
+        key: Dictionary key to extract (default: "answer")
+
+    Returns:
+        Extracted ground truth value
+
+    Examples:
+        >>> normalize_ground_truth({"answer": "Paris"})
+        'Paris'
+
+        >>> normalize_ground_truth("Paris")
+        'Paris'
+
+        >>> normalize_ground_truth(["Paris"])
+        'Paris'
+
+        >>> normalize_ground_truth([{"answer": "Paris"}])
+        'Paris'
+    """
+    if isinstance(ground_truth, dict):
+        return ground_truth.get(key, "")
+    elif isinstance(ground_truth, list):
+        if not ground_truth:
+            return ""
+        first = ground_truth[0]
+        if isinstance(first, dict):
+            return first.get(key, "")
+        return first
+    else:
+        return ground_truth
+
+
 def extract_answer_recursive(text: str, start_pattern: str, end_pattern: str) -> str:
 
     def find_matching_brace(s: str, start_idx: int) -> int:
@@ -142,3 +190,196 @@ def extract_answer_recursive(text: str, start_pattern: str, end_pattern: str) ->
                 results.append(extracted)
 
     return results[-1] if results else None
+
+
+def extract_content_from_tags(text: str, tag_name: str = "answer") -> Tuple[str, bool]:
+    """
+    Extract content from XML-like tags.
+
+    Args:
+        text: Response text potentially containing tags
+        tag_name: Tag name (default: "answer")
+
+    Returns:
+        Tuple of (extracted_content, success)
+        - extracted_content: Content from the last matching tag pair
+        - success: True if tag pair was found
+
+    Examples:
+        >>> extract_content_from_tags("<answer>42</answer>")
+        ('42', True)
+
+        >>> extract_content_from_tags("<answer>first</answer>\\n<answer>second</answer>", "answer")
+        ('second', True)
+
+        >>> extract_content_from_tags("No tags here", "answer")
+        ('', False)
+    """
+    pattern = f'<{tag_name}>(.*?)</{tag_name}>'
+    matches = list(re.finditer(pattern, text, flags=re.DOTALL))
+
+    if matches:
+        # Take the last match (in case there are multiple)
+        final_content = matches[-1].group(1).strip()
+        return final_content, True
+
+    return "", False
+
+
+def parse_json_with_fallback(content: str, expected_type: Optional[str] = None) -> Any:
+    """
+    Parse JSON/Python literals with fallback strategy.
+
+    This function tries multiple parsing strategies in order:
+    1. ast.literal_eval (safer for Python literals)
+    2. json.loads (for JSON strings)
+
+    Args:
+        content: String to parse
+        expected_type: Optional type hint ('list', 'dict', 'str', 'array')
+
+    Returns:
+        Parsed object or None if parsing fails
+
+    Examples:
+        >>> parse_json_with_fallback('["a", "b", "c"]')
+        ['a', 'b', 'c']
+
+        >>> parse_json_with_fallback('{"key": "value"}')
+        {'key': 'value'}
+
+        >>> parse_json_with_fallback('plain text', expected_type='str')
+        'plain text'
+    """
+    if not content:
+        return None
+
+    # For string type, just return the stripped content
+    if expected_type == 'str':
+        return content.strip()
+
+    # Try ast.literal_eval first (safer for Python literals)
+    try:
+        parsed = ast.literal_eval(content)
+        return parsed
+    except (ValueError, SyntaxError):
+        pass
+
+    # Fallback to json.loads
+    try:
+        parsed = json.loads(content)
+        return parsed
+    except json.JSONDecodeError:
+        pass
+
+    return None
+
+
+def normalize_text(text: str, lowercase: bool = True, strip: bool = True) -> str:
+    """
+    Normalize text for comparison.
+
+    Args:
+        text: Text to normalize
+        lowercase: Convert to lowercase (default: True)
+        strip: Strip whitespace (default: True)
+
+    Returns:
+        Normalized text
+
+    Examples:
+        >>> normalize_text("  Hello World  ")
+        'hello world'
+
+        >>> normalize_text("Hello World", lowercase=False)
+        'Hello World'
+    """
+    if not isinstance(text, str):
+        text = str(text)
+
+    if strip:
+        text = text.strip()
+    if lowercase:
+        text = text.lower()
+
+    return text
+
+
+def normalize_numeric(value: Union[int, float, str], precision: int = 2) -> Optional[float]:
+    """
+    Normalize numeric values for comparison.
+
+    Args:
+        value: Numeric value (int, float, or string)
+        precision: Number of decimal places to round to (default: 2)
+
+    Returns:
+        Normalized float value or None if conversion fails
+
+    Examples:
+        >>> normalize_numeric("42.12345", precision=2)
+        42.12
+
+        >>> normalize_numeric(42)
+        42.0
+
+        >>> normalize_numeric("not a number")
+        None
+    """
+    try:
+        # Remove common formatting characters
+        if isinstance(value, str):
+            value = value.replace(',', '').replace('%', '').strip()
+
+        result = float(value)
+        return round(result, precision)
+    except (ValueError, TypeError):
+        return None
+
+
+def compare_sets_unordered(pred: List, gt: List, normalize: bool = True) -> float:
+    """
+    Compare two lists as sets (order-independent).
+
+    Computes the Jaccard similarity (intersection over union) between two lists
+    treated as sets.
+
+    Args:
+        pred: Predicted list
+        gt: Ground truth list
+        normalize: Apply text normalization before comparison (default: True)
+
+    Returns:
+        Accuracy score between 0.0 and 1.0 (Jaccard similarity)
+
+    Examples:
+        >>> compare_sets_unordered(['a', 'b', 'c'], ['c', 'b', 'a'])
+        1.0
+
+        >>> compare_sets_unordered(['a', 'b'], ['b', 'c', 'd'])
+        0.25  # 1 intersection / 4 union
+    """
+    # Normalize items if requested
+    if normalize:
+        pred = [normalize_text(str(x)) for x in pred]
+        gt = [normalize_text(str(x)) for x in gt]
+    else:
+        pred = [str(x) for x in pred]
+        gt = [str(x) for x in gt]
+
+    pred_set = set(pred)
+    gt_set = set(gt)
+
+    # Handle empty ground truth
+    if not gt_set:
+        return 1.0 if not pred_set else 0.0
+
+    # Handle empty prediction
+    if not pred_set:
+        return 0.0
+
+    # Compute Jaccard similarity
+    intersection = pred_set & gt_set
+    union = pred_set | gt_set
+
+    return len(intersection) / len(union) if union else 1.0

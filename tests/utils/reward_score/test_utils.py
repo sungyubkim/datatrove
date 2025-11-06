@@ -1,6 +1,11 @@
 import pytest
 
-from datatrove.utils.reward_score.utils import extract_answer_recursive, parse_answer, parse_think
+from datatrove.utils.reward_score.utils import (
+    extract_answer_recursive,
+    normalize_ground_truth,
+    parse_answer,
+    parse_think,
+)
 
 
 class TestParseThink:
@@ -254,3 +259,43 @@ class TestExtractAnswerRecursive:
         text = r"\boxed{f(x) = [a, {b: c}]}"
         result = extract_answer_recursive(text, r"\\boxed\{", "}")
         assert result == "f(x) = [a, {b: c}]"
+
+
+class TestNormalizeGroundTruth:
+    """Tests for normalize_ground_truth function."""
+
+    def test_dict_format(self):
+        """Test dict format with 'answer' key."""
+        ground_truth = {"answer": "Paris"}
+        result = normalize_ground_truth(ground_truth)
+        assert result == "Paris"
+
+    def test_string_format(self):
+        """Test plain string format."""
+        ground_truth = "Paris"
+        result = normalize_ground_truth(ground_truth)
+        assert result == "Paris"
+
+    def test_list_with_string(self):
+        """Test list with single string element."""
+        ground_truth = ["Paris"]
+        result = normalize_ground_truth(ground_truth)
+        assert result == "Paris"
+
+    def test_list_with_dict(self):
+        """Test list with dict containing 'answer' key."""
+        ground_truth = [{"answer": "Paris"}]
+        result = normalize_ground_truth(ground_truth)
+        assert result == "Paris"
+
+    def test_empty_list(self):
+        """Test empty list returns empty string."""
+        ground_truth = []
+        result = normalize_ground_truth(ground_truth)
+        assert result == ""
+
+    def test_custom_key(self):
+        """Test dict with custom key parameter."""
+        ground_truth = {"solution": "42"}
+        result = normalize_ground_truth(ground_truth, key="solution")
+        assert result == "42"
