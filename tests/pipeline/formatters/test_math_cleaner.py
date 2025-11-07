@@ -229,6 +229,221 @@ class TestMathDatasetCleanerOpenR1:
 
         assert result.metadata["prompt"][0]["content"] == "Find all real solutions to the equation."
 
+    def test_openr1_parenthesized_number(self):
+        """OpenR1 NEW: '(2) Find the value of...'"""
+        doc = Document(
+            id="test-openr1-5",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "(2) Find the value of $x$ when $2x + 3 = 7$.",
+                    }
+                ],
+                "ground_truth": "2",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("openr1-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        assert result.metadata["prompt"][0]["content"] == "Find the value of $x$ when $2x + 3 = 7$."
+
+    def test_openr1_single_digit_period(self):
+        """OpenR1 NEW: '1. Calculate the following...'"""
+        doc = Document(
+            id="test-openr1-6",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "1. Calculate the following: $\\frac{3}{4} + \\frac{1}{2}$",
+                    }
+                ],
+                "ground_truth": "\\frac{5}{4}",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("openr1-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        assert result.metadata["prompt"][0]["content"] == "Calculate the following: $\\frac{3}{4} + \\frac{1}{2}$"
+
+    def test_openr1_letter_number_prefix(self):
+        """OpenR1 NEW: 'B1. Determine whether...'"""
+        doc = Document(
+            id="test-openr1-7",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "B1. Determine whether the following statement is true.",
+                    }
+                ],
+                "ground_truth": "True",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("openr1-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        assert result.metadata["prompt"][0]["content"] == "Determine whether the following statement is true."
+
+    def test_openr1_roman_numeral(self):
+        """OpenR1 NEW: 'II. Find all solutions...'"""
+        doc = Document(
+            id="test-openr1-8",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "II. Find all solutions to the equation $x^2 - 5x + 6 = 0$.",
+                    }
+                ],
+                "ground_truth": "x=2,3",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("openr1-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        assert result.metadata["prompt"][0]["content"] == "Find all solutions to the equation $x^2 - 5x + 6 = 0$."
+
+    def test_openr1_task_prefix(self):
+        """OpenR1 NEW: 'Task 2. Solve for x...'"""
+        doc = Document(
+            id="test-openr1-9",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "Task 2. Solve for $x$ in the equation $3x - 7 = 8$.",
+                    }
+                ],
+                "ground_truth": "5",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("openr1-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        assert result.metadata["prompt"][0]["content"] == "Solve for $x$ in the equation $3x - 7 = 8$."
+
+    def test_openr1_markdown_task_header(self):
+        """OpenR1 NEW: '## Task\\n\\nCalculate...'"""
+        doc = Document(
+            id="test-openr1-10",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "## Task\n\nCalculate the area of a circle with radius $r = 5$.",
+                    }
+                ],
+                "ground_truth": "25\\pi",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("openr1-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        assert result.metadata["prompt"][0]["content"] == "Calculate the area of a circle with radius $r = 5$."
+
+    def test_openr1_markdown_condition_header(self):
+        """OpenR1 NEW: '## Condition\\n\\nGiven that...'"""
+        doc = Document(
+            id="test-openr1-11",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "## Condition\n\nGiven that $a = 3$ and $b = 4$, find $\\sqrt{a^2 + b^2}$.",
+                    }
+                ],
+                "ground_truth": "5",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("openr1-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        assert result.metadata["prompt"][0]["content"] == "Given that $a = 3$ and $b = 4$, find $\\sqrt{a^2 + b^2}$."
+
+    def test_openr1_horizontal_rule(self):
+        """OpenR1 NEW: Problem with horizontal rule separator"""
+        doc = Document(
+            id="test-openr1-12",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "Find the value of $x$.\n\n---\n\nGiven: $2x + 3 = 7$",
+                    }
+                ],
+                "ground_truth": "2",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("openr1-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        assert "---" not in result.metadata["prompt"][0]["content"]
+        assert "Find the value of $x$" in result.metadata["prompt"][0]["content"]
+        assert "Given: $2x + 3 = 7$" in result.metadata["prompt"][0]["content"]
+
+    def test_openr1_translation_artifact(self):
+        """OpenR1 NEW: Translation instruction artifact"""
+        doc = Document(
+            id="test-openr1-13",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "Please retain the original text's line breaks and format, and output the translation result directly. Calculate $2 + 2$.",
+                    }
+                ],
+                "ground_truth": "4",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("openr1-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        content = result.metadata["prompt"][0]["content"]
+        assert "Please retain" not in content
+        assert "translation" not in content
+        assert "Calculate $2 + 2$" in content
+
+    def test_openr1_example_prefix(self):
+        """OpenR1 NEW: 'Example 2. Solve the equation...'"""
+        doc = Document(
+            id="test-openr1-14",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "Example 2. Solve the equation $x^2 = 9$.",
+                    }
+                ],
+                "ground_truth": "x=±3",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("openr1-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        assert result.metadata["prompt"][0]["content"] == "Solve the equation $x^2 = 9$."
+
 
 class TestMathDatasetCleanerSkywork:
     """Tests using actual problematic samples from Skywork-OR1 dataset."""
@@ -491,7 +706,8 @@ class TestMathDatasetCleanerConfiguration:
         assert cleaner.remove_problem_numbers is True
         assert cleaner.remove_point_allocations is True
         assert cleaner.remove_contest_metadata is True
-        assert cleaner.remove_markdown_headers is False  # Not needed for ORZ
+        assert cleaner.remove_markdown_headers is True  # Added based on analysis
+        assert cleaner.remove_special_artifacts is True  # NEW: horizontal rules, translation artifacts
         assert cleaner.detect_image_references is True
 
     def test_preset_openr1_configuration(self):
@@ -501,6 +717,7 @@ class TestMathDatasetCleanerConfiguration:
         assert cleaner.remove_point_allocations is True
         assert cleaner.remove_contest_metadata is True
         assert cleaner.remove_markdown_headers is True  # OpenR1 has markdown headers
+        assert cleaner.remove_special_artifacts is True  # NEW: horizontal rules, translation artifacts
         assert cleaner.detect_image_references is True
 
     def test_preset_skywork_configuration(self):

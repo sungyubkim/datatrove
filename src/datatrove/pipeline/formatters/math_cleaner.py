@@ -24,10 +24,15 @@ PROBLEM_NUMBER_PATTERNS = [
     r"^Problem\s+\d+[\.:]\s*",  # "Problem 6."
     r"^Question\s+\d+[\.:,]\s*",  # "Question 230,"
     r"^Exercise\s+\d+[\.:]\s*",  # "Exercise 12:"
+    r"^Task\s+\d+[\.:]\s*",  # "Task 2."
+    r"^Example\s+\d+[\.:]\s*",  # "Example 31:"
     r"^\d+\.\d+(?:[\.:]\s*|\s+)",  # "8.3:", "8.3.", "8.3 "
     r"^[A-Z]\d+\.\d+(?:[\.:]\s*|\s+)",  # "G1.4:", "I2.1:", "G1.4 "
+    r"^[A-Z]\d+[\.:]\s*",  # "B1.", "G2.", "I4." (letter-number without decimal)
     r"^[A-Z]\d+\s*\([A-Z]+\)\s*",  # "A2 (RUS)"
-    r"^Example\s+\d+[\.:]\s*",  # "Example 31:"
+    r"^\d+[\.:]\s+",  # "1. ", "2. ", "5. " (single/multi digit followed by period and space)
+    r"^\(\d+\)\s*",  # "(1)", "(2)", "(3)" at start
+    r"^[IVXLCDM]+[\.:]\s+",  # "II.", "III.", "IV." (Roman numerals)
 ]
 
 # Contest metadata patterns
@@ -53,7 +58,7 @@ MARKDOWN_HEADER_PATTERNS = [
     # Remove all markdown headers (# to ######) with any content
     r"^#{1,6}\s+[^\n]+\n+",
     # Remove standalone header keywords (in case markdown prefix was already removed)
-    r"^(Problem Statement|Condition|Task|Solution|Zadatak):?\s*\n+",
+    r"^(Problem Statement|Problem|Task|Condition|Solution|Answer|Zadatak):?\s*\n+",
 ]
 
 # Image reference detection (for statistics only)
@@ -64,6 +69,17 @@ IMAGE_REFERENCE_PATTERNS = [
     r"(?:see|refer to|shown in)\s+(?:Figure|Diagram|figure|diagram)\s+\d+",
 ]
 
+# Special artifacts (horizontal rules, translation instructions, etc.)
+SPECIAL_ARTIFACT_PATTERNS = [
+    # Horizontal rules (must have newlines around them)
+    r"\n\s*[-=_*]{3,}\s*\n",  # "---", "===", "___", "***" as separators
+    # Translation instruction artifacts
+    r"[Pp]lease retain the original text'?s? line breaks and format,?\s*and output the translation result directly\.?",
+    r"[Tt]ranslation:?\s*$",  # "Translation:" at end of line
+    # Answer/response markers at the end (can interfere with problems)
+    r"\n\s*(?:Answer|Solution):\s*$",  # Trailing "Answer:" or "Solution:"
+]
+
 
 # Preset configurations for each dataset
 CLEANING_PRESETS = {
@@ -72,6 +88,7 @@ CLEANING_PRESETS = {
         "remove_point_allocations": True,  # 2-3%
         "remove_contest_metadata": True,  # 5-8%
         "remove_markdown_headers": True,  # 7-8% (added based on analysis)
+        "remove_special_artifacts": True,  # NEW: horizontal rules, translation artifacts
         "detect_image_references": True,  # 1-2%
         "normalize_whitespace": True,
     },
@@ -80,6 +97,7 @@ CLEANING_PRESETS = {
         "remove_point_allocations": True,  # 4%
         "remove_contest_metadata": True,  # 5%
         "remove_markdown_headers": True,  # 5%
+        "remove_special_artifacts": True,  # NEW: horizontal rules, translation artifacts
         "detect_image_references": True,  # 5%
         "normalize_whitespace": True,
     },
@@ -106,10 +124,11 @@ class MathDatasetCleaner(PipelineStep):
     """Clean math problem datasets in VERL format.
 
     Removes various artifacts from math problems including:
-    - Problem numbering prefixes (e.g., "Problem 6.", "8.3 ", "Question 230,")
+    - Problem numbering prefixes (e.g., "Problem 6.", "8.3 ", "Question 230,", "(1)", "1. ")
     - Contest metadata (e.g., "2004 AIME Problem 3", "20th APMC 1997")
     - Point allocations (e.g., "(8 points)", "[15 points]")
-    - Markdown headers (e.g., "## Problem Statement")
+    - Markdown headers (e.g., "## Problem Statement", "## Task")
+    - Special artifacts (e.g., horizontal rules "---", translation instructions)
 
     Preserves:
     - LaTeX formatting (NO escaping changes)
@@ -127,6 +146,7 @@ class MathDatasetCleaner(PipelineStep):
         remove_point_allocations: Remove point allocation text (default: True)
         remove_contest_metadata: Remove contest source metadata (default: True)
         remove_markdown_headers: Remove markdown headers (default: True)
+        remove_special_artifacts: Remove horizontal rules, translation artifacts (default: False)
         detect_image_references: Detect and count image references (default: True)
         normalize_whitespace: Normalize excessive whitespace (default: True)
         log_cleaning_stats: Log cleaning statistics (default: True)
@@ -160,6 +180,7 @@ class MathDatasetCleaner(PipelineStep):
         remove_point_allocations: bool = True,
         remove_contest_metadata: bool = True,
         remove_markdown_headers: bool = True,
+        remove_special_artifacts: bool = False,
         detect_image_references: bool = True,
         normalize_whitespace: bool = True,
         log_cleaning_stats: bool = True,
@@ -171,6 +192,7 @@ class MathDatasetCleaner(PipelineStep):
             remove_point_allocations: Remove point allocation text
             remove_contest_metadata: Remove contest source metadata
             remove_markdown_headers: Remove markdown headers
+            remove_special_artifacts: Remove horizontal rules, translation artifacts
             detect_image_references: Detect and count image references
             normalize_whitespace: Normalize excessive whitespace
             log_cleaning_stats: Log cleaning statistics
@@ -180,6 +202,7 @@ class MathDatasetCleaner(PipelineStep):
         self.remove_point_allocations = remove_point_allocations
         self.remove_contest_metadata = remove_contest_metadata
         self.remove_markdown_headers = remove_markdown_headers
+        self.remove_special_artifacts = remove_special_artifacts
         self.detect_image_references = detect_image_references
         self.normalize_whitespace = normalize_whitespace
         self.log_cleaning_stats = log_cleaning_stats
@@ -204,6 +227,10 @@ class MathDatasetCleaner(PipelineStep):
         if self.remove_markdown_headers:
             self.markdown_header_regex = re.compile(
                 "|".join(f"({p})" for p in MARKDOWN_HEADER_PATTERNS), re.MULTILINE
+            )
+        if self.remove_special_artifacts:
+            self.special_artifact_regex = re.compile(
+                "|".join(f"({p})" for p in SPECIAL_ARTIFACT_PATTERNS), re.MULTILINE
             )
         if self.detect_image_references:
             self.image_reference_regex = re.compile(
@@ -255,6 +282,7 @@ class MathDatasetCleaner(PipelineStep):
             "contest_metadata_removed": False,
             "point_allocation_removed": False,
             "markdown_header_removed": False,
+            "special_artifact_removed": False,
             "image_reference_detected": False,
         }
 
@@ -287,6 +315,13 @@ class MathDatasetCleaner(PipelineStep):
             new_text = self.point_allocation_regex.sub(" ", text)  # Replace with single space
             if new_text != text:
                 stats["point_allocation_removed"] = True
+                text = new_text
+
+        # Remove special artifacts (horizontal rules, translation instructions)
+        if self.remove_special_artifacts and hasattr(self, "special_artifact_regex"):
+            new_text = self.special_artifact_regex.sub(" ", text)  # Replace with single space
+            if new_text != text:
+                stats["special_artifact_removed"] = True
                 text = new_text
 
         # Detect image references (but don't remove)
@@ -366,6 +401,8 @@ class MathDatasetCleaner(PipelineStep):
                                 self.stat_update("point_allocation_removed")
                             if cleaning_stats.get("markdown_header_removed"):
                                 self.stat_update("markdown_header_removed")
+                            if cleaning_stats.get("special_artifact_removed"):
+                                self.stat_update("special_artifact_removed")
                     else:
                         self.stat_update("unchanged")
 
