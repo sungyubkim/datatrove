@@ -163,4 +163,10 @@ cython_debug/
 playground/
 
 # Example data files (large datasets should not be in git)
-examples/data/**/*.parquet*.parquet
+examples/data/**/*.parquet
+*.parquet
+
+# Deduplication output directories
+scripts/deduplication/_deduplicated/
+scripts/deduplication/if_data/
+scripts/deduplication/qa_data/

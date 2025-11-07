@@ -366,3 +366,49 @@ class DuplicationStats:
         print(f"Duplicate rows:  {format_number(self.duplicate_rows)}")
         print(f"Duplicate rate:  {format_percentage(self.duplicate_rows, self.total_rows)}")
         print(f"{'=' * 60}\n")
+
+
+def normalize_row_schema(row_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalize a VERL row to standard schema format.
+
+    This ensures consistent field ordering and structure across all datasets:
+    - prompt: list of {content, role} dicts (alphabetical order)
+    - reward_model: {ground_truth, style} dict (alphabetical order)
+    - extra_info: {index} dict (minimal fields only)
+
+    Args:
+        row_dict: Raw row dictionary from parquet file
+
+    Returns:
+        Normalized row dictionary with consistent schema
+    """
+    normalized = {}
+
+    # Copy simple fields
+    normalized['data_source'] = row_dict.get('data_source', '')
+    normalized['ability'] = row_dict.get('ability', '')
+
+    # Normalize prompt structure (role before content)
+    prompts = []
+    for p in row_dict.get('prompt', []):
+        prompts.append({
+            'role': p.get('role', 'user'),
+            'content': p.get('content', '')
+        })
+    normalized['prompt'] = prompts
+
+    # Normalize reward_model (ensure alphabetical field order)
+    rm = row_dict.get('reward_model', {})
+    normalized['reward_model'] = {
+        'ground_truth': rm.get('ground_truth', ''),
+        'style': rm.get('style', '')
+    }
+
+    # Normalize extra_info (only keep index)
+    ei = row_dict.get('extra_info', {})
+    normalized['extra_info'] = {
+        'index': ei.get('index', 0)
+    }
+
+    return normalized

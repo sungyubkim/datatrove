@@ -28,8 +28,27 @@ from deduplication.utils import (
     save_stats,
     format_number,
     format_percentage,
+    normalize_row_schema,
     DuplicationStats
 )
+
+
+# Standard VERL schema for consistent output
+STANDARD_SCHEMA = pa.schema([
+    ('data_source', pa.string()),
+    ('prompt', pa.list_(pa.struct([
+        ('role', pa.string()),
+        ('content', pa.string())
+    ]))),
+    ('ability', pa.string()),
+    ('reward_model', pa.struct([
+        ('ground_truth', pa.string()),
+        ('style', pa.string())
+    ])),
+    ('extra_info', pa.struct([
+        ('index', pa.int64())
+    ]))
+])
 
 
 def deduplicate_dataset(
@@ -88,7 +107,6 @@ def deduplicate_dataset(
 
     # Prepare writer
     writer = None
-    schema = None
     output_file_idx = 0
     rows_in_current_file = 0
     ROWS_PER_OUTPUT_FILE = 500000  # Split large outputs
@@ -101,9 +119,6 @@ def deduplicate_dataset(
         # Read file
         table = pq.read_table(input_file)
         total_rows_in_file = table.num_rows
-
-        if schema is None:
-            schema = table.schema
 
         # Process in batches
         for batch_start in tqdm(
@@ -142,13 +157,15 @@ def deduplicate_dataset(
                 if not is_duplicate:
                     hash_set.add(problem_hash)
                     hash_to_text[problem_hash] = problem_text
-                    unique_rows.append(row_dict)
+                    # Normalize row to standard schema
+                    normalized_row = normalize_row_schema(row_dict)
+                    unique_rows.append(normalized_row)
 
             # Write unique rows
             if not dry_run and unique_rows:
-                # Convert to pyarrow table
+                # Convert to pyarrow table with standard schema
                 df_unique = pd.DataFrame(unique_rows)
-                table_unique = pa.Table.from_pandas(df_unique, schema=schema)
+                table_unique = pa.Table.from_pandas(df_unique, schema=STANDARD_SCHEMA)
 
                 # Initialize or write to writer
                 if writer is None or rows_in_current_file >= ROWS_PER_OUTPUT_FILE:
@@ -160,7 +177,7 @@ def deduplicate_dataset(
                     output_filename = f"train-{output_file_idx:05d}.parquet"
                     output_filepath = os.path.join(output_path, 'data', output_filename)
 
-                    writer = pq.ParquetWriter(output_filepath, schema)
+                    writer = pq.ParquetWriter(output_filepath, STANDARD_SCHEMA)
                     rows_in_current_file = 0
                     output_file_idx += 1
 

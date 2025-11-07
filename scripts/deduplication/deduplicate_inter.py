@@ -28,7 +28,26 @@ from deduplication.utils import (
     save_stats,
     format_number,
     format_percentage,
+    normalize_row_schema,
 )
+
+
+# Standard VERL schema for consistent output
+STANDARD_SCHEMA = pa.schema([
+    ('data_source', pa.string()),
+    ('prompt', pa.list_(pa.struct([
+        ('role', pa.string()),
+        ('content', pa.string())
+    ]))),
+    ('ability', pa.string()),
+    ('reward_model', pa.struct([
+        ('ground_truth', pa.string()),
+        ('style', pa.string())
+    ])),
+    ('extra_info', pa.struct([
+        ('index', pa.int64())
+    ]))
+])
 
 
 def deduplicate_inter_dataset(
@@ -77,7 +96,6 @@ def deduplicate_inter_dataset(
         os.makedirs(combined_output_path, exist_ok=True)
 
     combined_writer = None
-    combined_schema = None
     combined_file_idx = 0
     combined_rows_in_file = 0
     ROWS_PER_FILE = 500000
@@ -125,9 +143,6 @@ def deduplicate_inter_dataset(
             table = pq.read_table(input_file)
             total_rows_in_file = table.num_rows
 
-            if combined_schema is None:
-                combined_schema = table.schema
-
             # Process in batches
             for batch_start in tqdm(
                 range(0, total_rows_in_file, batch_size),
@@ -172,21 +187,15 @@ def deduplicate_inter_dataset(
                         global_hash_set.add(problem_hash)
                         hash_to_dataset[problem_hash] = dataset_name
 
-                        # Normalize extra_info to consistent schema
-                        original_extra_info = row_dict.get('extra_info', {})
-                        row_dict['extra_info'] = {
-                            'index': original_extra_info.get('index', 0),
-                            'split': original_extra_info.get('split', 'train'),
-                            'original_dataset': dataset_name
-                        }
-
-                        unique_rows.append(row_dict)
+                        # Normalize row to standard schema
+                        normalized_row = normalize_row_schema(row_dict)
+                        unique_rows.append(normalized_row)
 
                 # Write to combined output
                 if combine_output and unique_rows:
                     df_unique = pd.DataFrame(unique_rows)
-                    # Don't enforce schema to allow new fields like original_dataset
-                    table_unique = pa.Table.from_pandas(df_unique)
+                    # Enforce standard schema for consistency
+                    table_unique = pa.Table.from_pandas(df_unique, schema=STANDARD_SCHEMA)
 
                     # Create or rotate writer
                     if combined_writer is None or combined_rows_in_file >= ROWS_PER_FILE:
@@ -195,8 +204,8 @@ def deduplicate_inter_dataset(
 
                         output_filename = f"train-{combined_file_idx:05d}.parquet"
                         output_filepath = os.path.join(combined_output_path, output_filename)
-                        # Use schema from the table being written (includes original_dataset)
-                        combined_writer = pq.ParquetWriter(output_filepath, table_unique.schema)
+                        # Use standard schema for all output files
+                        combined_writer = pq.ParquetWriter(output_filepath, STANDARD_SCHEMA)
                         combined_rows_in_file = 0
                         combined_file_idx += 1
 
