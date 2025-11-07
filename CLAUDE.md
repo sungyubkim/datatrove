@@ -119,6 +119,12 @@ All blocks in `src/datatrove/pipeline/`:
 - `JsonlWriter`, `ParquetWriter`, `HuggingFaceWriter`
 - Use `output_filename` templates: `${rank}`, `${id}`, `${metadata_key}`
 - Inherit from `DiskWriter` base class
+- **IMPORTANT - macOS File Exclusion**: When uploading to Hugging Face Hub, always exclude macOS system files:
+  - `.DS_Store`: Finder metadata files
+  - `._*`: AppleDouble files (extended attributes on non-macOS filesystems like ExFAT)
+  - `.Spotlight-V100`, `.Trashes`: Other macOS system files
+  - Use `ignore_patterns` parameter in `HuggingFaceWriter` or filter files before upload
+  - Example: When using external drives (ExFAT/NTFS), these files are automatically created by macOS
 
 **Extractors** (`extractors/`): Extract text from raw formats
 - `Trafilatura`: HTML text extraction (most common)
@@ -133,11 +139,16 @@ All blocks in `src/datatrove/pipeline/`:
 **Formatters** (`formatters/`): Modify document content
 - `PIIFormatter`: Remove personally identifiable information
 - `FTFYFormatter`: Fix text encoding issues
+- `SymbolLinesRemover`: Remove lines containing excessive symbols/special characters
+- `RLVRFormatter`: Format data for RLVR (Reinforcement Learning from Verification and Reasoning)
+- `MathDatasetCleaner`: Clean and normalize math datasets by removing artifacts and standardizing formats
 
 **Dedup** (`dedup/`): Deduplication algorithms
 - `MinhashDedup*`: Multi-stage minhash deduplication (signature → buckets → cluster → filter)
 - `SentenceDedup`: Sentence-level exact deduplication
 - `ExactSubstrings`: Substring deduplication
+- `BloomFilter`: Memory-efficient probabilistic deduplication using bloom filters
+- `URLDedup`: URL-based deduplication for web-scraped data
 - Typically runs as multi-stage dependent pipelines
 
 **Stats** (`stats/`): Collect dataset statistics
@@ -184,6 +195,10 @@ runner = InferenceRunner(
 - Integrated from VERL project for scoring generated responses
 - Supports multiple dataset types with automatic scoring method selection
 - `compute_score()`: Main entry point that routes to appropriate scorer
+
+**Preprocessing** (`preprocessing/`): Data preprocessing utilities
+- `rlvr_to_ifbench`: Convert RLVR format to IFBench format for instruction-following benchmarks
+- Located in `src/datatrove/preprocessing/`
 
 **Supported Dataset Types:**
 - **Math datasets** (via `math_verify`):
@@ -235,6 +250,12 @@ runner = InferenceRunner(
     - `INTERMEDIATEREWARD=1`: Simplified intermediate scoring
   - **Migration Note**: `toolrl_gpt_oss.py` has been removed. Use unified `toolrl.py` with `format_type="gpt_oss"` or `"auto"`
 
+- **IFEval** (via `ifeval`):
+  - `allenai/IF_multi_constraints_upto5`, `ifeval`, `sungyub/ifbench-verl`, `sungyub/ifeval-rlvr-verl`
+  - Instruction-following evaluation with constraint checking
+  - Python dependencies: `langdetect`, `immutabledict`, `nltk` (auto-installed with `reward_scoring`)
+  - Validates adherence to specific instructions and constraints
+
 - **CodeV** (via `codev`):
   - `codev`, `sungyub/codev-r1-verl`
   - Verilog code generation with equivalence checking
@@ -258,11 +279,33 @@ runner = InferenceRunner(
     - Supports multiple ground truth variants per problem
   - Returns dict with `score`, `reward_fmt`, `reward_think`, verification details
 
+- **Table Reasoning** (via `table_boxed`, `tqa`, `tfv`, `ff_tqa`):
+  - **Boxed answer format**: `hitab`, `multihier`, `finqa` - Guru datasets with boxed answers
+  - **Table QA**: `WTQ` (WikiTableQuestions), `HiTab` - JSON list answers
+  - **Table Fact Verification**: `TabFact` - Binary entailment/refutation (True/False)
+  - **Free-form Table QA**: `FeTaQA` - BLEU/ROUGE scoring for free-form answers
+  - Python dependencies: `rouge-score`, `sacrebleu` (in base dependencies)
+  - Evaluation methods vary by dataset type
+
+- **Document QA and Long Context** (via `docqa`, `docmath`, `long`):
+  - **Document QA**: `multihoprag`, `musique` - Multi-hop QA with exact match/F1 scoring
+  - **Document Math**: `docmath` - Math problems in document context with numeric answers
+  - **Long Context Multiple Choice**: `long_toc_choices` - Multiple choice QA (A-D) for long contexts
+  - Uses exact match and F1 metrics for answer validation
+
+- **Logic and Reasoning** (via `logic`):
+  - `ordering_puzzle`, `zebra_puzzle`, `graph_logical` - Constraint satisfaction problems
+  - `arcagi1`, `arcagi2`, `barc` - ARC-AGI abstract reasoning tasks
+  - General pattern matching: any dataset with `puzzle`, `arcagi`, or `barc` in name
+  - Evaluates logical reasoning and pattern recognition capabilities
+
 **Installation:**
 ```bash
 pip install -e ".[reward_scoring]"  # Installs all reward scoring dependencies
 # For CodeV: Also install Icarus Verilog (see system requirements above)
 ```
+
+**Note**: The reward scoring system supports both XML and GPT OSS formats across all applicable dataset types. Use `format_type="auto"` for automatic format detection, or explicitly set `format_type="xml"` or `format_type="gpt_oss"` as needed.
 
 **Usage Example:**
 ```python
@@ -418,6 +461,10 @@ stage3.run()  # Automatically runs stage1 → stage2 → stage3
 - I/O utilities: `src/datatrove/io.py`
 - Logging utilities: `src/datatrove/utils/logging.py`
 - Stats handling: `src/datatrove/utils/stats.py`
+- Reward scoring: `src/datatrove/utils/reward_score/` (main: `__init__.py`, subdirectories for each scorer)
+- Preprocessing utilities: `src/datatrove/preprocessing/`
+- Inference servers: `src/datatrove/pipeline/inference/servers/` (base classes and implementations)
+- Command-line tools: `src/datatrove/tools/`
 
 ## Testing Strategy
 
@@ -463,8 +510,16 @@ All examples are in `examples/`:
 - `process_common_crawl_dump.py`: CommonCrawl WARC processing pipeline
 - `minhash_deduplication.py`: Complete minhash deduplication workflow
 - `sentence_deduplication.py`: Sentence-level deduplication
+- `url_deduplication.py`: URL-based deduplication for web data
+- `exact_substrings.py`: Substring deduplication pipeline
 - `tokenize_c4.py`: Tokenization from HuggingFace datasets
+- `tokenize_from_hf_to_s3.py`: Tokenize HuggingFace datasets and save to S3
 - `summary_stats.py`: Collecting and merging statistics
+- `filter_hf_dataset.py`: Apply filters to HuggingFace datasets
+- `inference_example_chunked.py`: LLM inference with automatic checkpointing
+- `verl_data_processing.py`: Complete VERL data processing pipeline with multi-response generation and scoring
+- `preprocess_codecontests_plus.py`: Preprocess Code-Contests-Plus dataset for multi-language code generation
+- `convert_toolrl_to_gpt_oss.py`: Convert ToolRL dataset from XML to GPT OSS 120B format
 
 ## Notes for Development
 
