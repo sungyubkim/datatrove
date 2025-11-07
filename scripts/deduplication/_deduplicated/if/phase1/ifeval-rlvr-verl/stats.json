@@ -1,0 +1,36 @@
+{
+  "dataset": "ifeval-rlvr-verl",
+  "phase": "intra",
+  "timestamp": "2025-11-07 13:12:52",
+  "input": {
+    "files": 1,
+    "total_rows": 14973
+  },
+  "output": {
+    "files": 1,
+    "unique_rows": 14970
+  },
+  "deduplication": {
+    "duplicates_found": 3,
+    "duplicate_rate": 0.0002003606491685033,
+    "unique_rate": 0.9997996393508315
+  },
+  "processing": {
+    "duration_seconds": 0.5692059993743896,
+    "rows_per_second": 26305.063573568656
+  },
+  "top_duplicates": [
+    {
+      "hash": "70d226f6d93205d391b5d26ba74b9754b49dbfad2d34e92f8b24b758bc5d2d6e",
+      "occurrences": 1
+    },
+    {
+      "hash": "efd6ff3a86ac88d4c50599217665a397d2545cd3dc77baa06caaba5e8e54521c",
+      "occurrences": 1
+    },
+    {
+      "hash": "90e108a07bd69a82919b26845072ecac35091e38ea395a425af11ba48ff22bc9",
+      "occurrences": 1
+    }
+  ]
+}

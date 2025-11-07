@@ -118,7 +118,7 @@ def compute_score(
             ground_truth,
             continuous=True,
         )
-    elif data_source in ["allenai/IF_multi_constraints_upto5", "ifeval", "sungyub/ifbench-verl"]:
+    elif data_source in ["allenai/IF_multi_constraints_upto5", "ifeval", "sungyub/ifbench-verl", "sungyub/ifeval-rlvr-verl"]:
         # Instruction Following evaluation
         from . import ifeval
 

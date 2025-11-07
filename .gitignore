@@ -163,4 +163,4 @@ cython_debug/
 playground/
 
 # Example data files (large datasets should not be in git)
-examples/data/**/*.parquet
+examples/data/**/*.parquet*.parquet

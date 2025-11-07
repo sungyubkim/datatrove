@@ -1,0 +1,32 @@
+{
+  "phase": "inter",
+  "timestamp": "2025-11-07 13:13:21",
+  "priority_order": [
+    "ifeval-rlvr-verl",
+    "ifbench-verl"
+  ],
+  "total_input_rows": 110342,
+  "total_output_rows": 110342,
+  "total_duplicates_removed": 0,
+  "duplicate_rate": 0.0,
+  "by_dataset": {
+    "ifeval-rlvr-verl": {
+      "input_rows": 14970,
+      "kept_rows": 14970,
+      "removed_duplicates": 0,
+      "duplicate_rate": 0.0,
+      "duplicate_sources": {}
+    },
+    "ifbench-verl": {
+      "input_rows": 95372,
+      "kept_rows": 95372,
+      "removed_duplicates": 0,
+      "duplicate_rate": 0.0,
+      "duplicate_sources": {}
+    }
+  },
+  "processing": {
+    "duration_seconds": 4.133867979049683,
+    "rows_per_second": 26692.192532323214
+  }
+}

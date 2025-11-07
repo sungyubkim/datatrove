@@ -1,0 +1,64 @@
+{
+  "dataset": "table-r1-zero-verl",
+  "phase": "intra",
+  "timestamp": "2025-11-07 13:09:14",
+  "input": {
+    "files": 1,
+    "total_rows": 69265
+  },
+  "output": {
+    "files": 1,
+    "unique_rows": 69119
+  },
+  "deduplication": {
+    "duplicates_found": 146,
+    "duplicate_rate": 0.0021078466758102936,
+    "unique_rate": 0.9978921533241897
+  },
+  "processing": {
+    "duration_seconds": 3.4455769062042236,
+    "rows_per_second": 20102.584236410185
+  },
+  "top_duplicates": [
+    {
+      "hash": "7f6d376a52bb885d261bbc363dcbaa02af2b355c638bd9d67b74e0cd64b7abae",
+      "occurrences": 3
+    },
+    {
+      "hash": "e76c32a0f59429810196a2fe3ba27e15619cb1b200c3d3e90916ecdad4e3e2b9",
+      "occurrences": 2
+    },
+    {
+      "hash": "45b88562fc887a0c005d309730aecc2ee89d5dfe78d1b8556ecd4d62dd746318",
+      "occurrences": 2
+    },
+    {
+      "hash": "b7096504b308dc04aca73008178bbd0cf7f928525161e6909531c330d0e4ff20",
+      "occurrences": 2
+    },
+    {
+      "hash": "da41e75be2a607ac51d8b03ac7ec1651632ea592a74a795647d9035e671f1087",
+      "occurrences": 2
+    },
+    {
+      "hash": "51af5f139d1c3c359e7a153aec6c69ab3937f4e8f8b4c33a23f29d738214b96c",
+      "occurrences": 1
+    },
+    {
+      "hash": "e2ca291833e06c8a1cc994d76d49771581e7ce109dd37c4091c61ea01fca312e",
+      "occurrences": 1
+    },
+    {
+      "hash": "15cc15e46ea86bebc3c47ad20ed7acc1befac51904eaf3069e22792f17f617a3",
+      "occurrences": 1
+    },
+    {
+      "hash": "4ffa6a7b716caa93f0468763ccd0c4f3d1bc422cb7c36cabc1b38b2783adb50f",
+      "occurrences": 1
+    },
+    {
+      "hash": "7089327ba70a237f8ac291a7bbcc2c120cd304dfb9c1519809e8203bfd7b9cac",
+      "occurrences": 1
+    }
+  ]
+}
