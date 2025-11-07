@@ -1,5 +1,0 @@
-docqa-rl-verl
-guru-logic-verl
-toolrl-4k-verl
-guru-table-verl
-table-r1-zero-verl
