@@ -135,8 +135,12 @@ def _extract_module_blocks(code):
 
         if filtered_modules:
             return "\n\n".join(filtered_modules)
+        else:
+            # All modules were testbenches - return None to indicate no valid DUT code
+            return None
 
-    # If no match, return original (might have valid module but complex syntax)
+    # If no module...endmodule blocks found at all, return original
+    # (might have valid module but complex syntax)
     return code
 
 
