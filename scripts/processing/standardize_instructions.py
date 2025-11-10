@@ -204,6 +204,21 @@ def process_dataset(
     print(f"\nStep 3: Applying standardization and deduplication with PyArrow streaming...")
     print(f"  This may take a while for {input_file}...")
 
+    # Get original schema from dataset to preserve it exactly
+    print("  Extracting original schema to preserve compatibility...")
+    schema = None
+    schema_examples = []
+    for idx, example in enumerate(dataset):
+        schema_examples.append(example)
+        if idx >= 100:  # Get 100 examples for reliable schema inference
+            break
+
+    if schema_examples:
+        from datasets import Dataset as HFDataset
+        temp_dataset = HFDataset.from_list(schema_examples)
+        schema = temp_dataset.data.schema
+        print(f"  ✓ Original schema captured: {len(schema)} fields")
+
     # PyArrow streaming setup
     hash_set = set()
     hash_to_text = {}
@@ -211,8 +226,28 @@ def process_dataset(
     BATCH_SIZE = 10000
     writer = None
 
-    # Get VERL schema from first example
-    schema = None
+    # Collect original samples for comparison (before standardization)
+    original_samples = {}  # {index: original_content}
+    sample_indices_to_collect = set()
+
+    # Determine which indices to collect based on sample_rate
+    temp_idx = 0
+    for _ in dataset:
+        temp_idx += 1
+        if temp_idx % sample_rate == 0 and len(sample_indices_to_collect) < 50:
+            sample_indices_to_collect.add(temp_idx - 1)
+        if len(sample_indices_to_collect) >= 50:
+            break
+
+    # Collect original content for those indices
+    for idx, example in enumerate(dataset):
+        if idx in sample_indices_to_collect:
+            if 'prompt' in example and isinstance(example['prompt'], list) and len(example['prompt']) > 0:
+                first_message = example['prompt'][0]
+                if isinstance(first_message, dict) and 'content' in first_message:
+                    original_samples[idx] = first_message['content']
+        if len(original_samples) >= len(sample_indices_to_collect):
+            break
 
     # Create document generator
     def document_generator(dataset):
@@ -268,22 +303,25 @@ def process_dataset(
                         if 'reward_model' in doc.metadata and isinstance(doc.metadata['reward_model'], dict):
                             ground_truth = doc.metadata['reward_model'].get('ground_truth', 'N/A')
 
+                        # Get original content for comparison
+                        original_content = original_samples.get(doc_count - 1, "Original not available")
+
                         stats['sample_examples'].append({
                             'index': doc_count - 1,
-                            'problem': problem_text,  # Full problem text
+                            'original': original_content,  # Original before standardization
+                            'standardized': problem_text,  # After standardization
                             'ground_truth': ground_truth if ground_truth else 'N/A',  # Full ground truth
                         })
 
                     # Write batch when full
                     if len(batch_data) >= BATCH_SIZE:
+                        # Use original schema to preserve exact structure
                         batch_table = pa.Table.from_pylist(batch_data, schema=schema)
 
-                        # Infer schema from first batch
-                        if schema is None:
-                            schema = batch_table.schema
-
                         if writer is None:
-                            # First batch: create writer
+                            # First batch: create writer with original schema
+                            if schema is None:
+                                raise ValueError("Schema should have been captured from original dataset")
                             writer = pq.ParquetWriter(output_file, schema=schema, compression='snappy')
 
                         writer.write_table(batch_table)
@@ -302,13 +340,14 @@ def process_dataset(
 
         # Write remaining batch
         if batch_data:
+            # Use original schema to preserve exact structure
+            if schema is None:
+                raise ValueError("Schema should have been captured from original dataset")
+
             batch_table = pa.Table.from_pylist(batch_data, schema=schema)
 
-            if schema is None:
-                schema = batch_table.schema
-
             if writer is None:
-                # Only one batch: use simple write
+                # Only one batch: use simple write with original schema
                 pq.write_table(batch_table, output_file, compression='snappy')
             else:
                 writer.write_table(batch_table)
@@ -428,7 +467,7 @@ Standardization Statistics
     report += f"Processing time:             {stats['duration_seconds']:.1f} seconds ({stats['duration_seconds']/60:.1f} minutes)\n"
     report += f"Processing speed:            {stats['rows_per_second']:.0f} rows/second\n"
 
-    # Add sample examples
+    # Add sample examples with before/after comparison
     sample_examples = stats.get('sample_examples', [])
     if sample_examples:
         report += f"\n{'='*70}\n"
@@ -439,7 +478,20 @@ Standardization Statistics
             report += f"\n{'-'*70}\n"
             report += f"Sample {i} (#{example['index']})\n"
             report += f"{'-'*70}\n"
-            report += f"{example['problem']}\n\n"
+
+            # Show BEFORE standardization (original)
+            if 'original' in example:
+                report += f"BEFORE Standardization (Original v1.1):\n"
+                report += f"{'-'*70}\n"
+                report += f"{example['original']}\n\n"
+
+            # Show AFTER standardization
+            if 'standardized' in example:
+                report += f"AFTER Standardization (v1.2 - Redundancy Removed):\n"
+                report += f"{'-'*70}\n"
+                report += f"{example['standardized']}\n\n"
+
+            # Ground truth
             report += f"Ground Truth: {example['ground_truth']}\n"
 
     report += f"\n{'='*70}\n"

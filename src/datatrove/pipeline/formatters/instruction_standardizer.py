@@ -494,13 +494,9 @@ class InstructionStandardizer(PipelineStep):
                     if standardized_content != original_content:
                         user_message["content"] = standardized_content
 
-                        # Add format version metadata for tracking and migration
-                        # v1.0: Basic 6-section format
-                        # v1.1: Added Implementation Requirements section (7-section)
-                        # v1.2: Removed redundant Input/Output Format sections (5-section, Verilog only)
-                        if not doc.metadata:
-                            doc.metadata = {}
-                        doc.metadata["_instruction_format_version"] = "1.2"
+                        # Note: Format version tracking removed to preserve exact schema compatibility
+                        # Format history: v1.0 → v1.1 (added Implementation Requirements) → v1.2 (removed redundant I/O sections)
+                        # Clients can infer version from section structure if needed
 
                         self.stat_update("standardized")
 
