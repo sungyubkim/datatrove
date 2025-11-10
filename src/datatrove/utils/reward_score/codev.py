@@ -229,16 +229,16 @@ def verify_verilog_via_sandbox(
             return {
                 "correct": True,
                 "error_rate": error_rate,
-                "stdout": stdout[:500],  # Truncate for logging
-                "stderr": stderr[:500] if stderr else None
+                "stdout": stdout,  # Full output
+                "stderr": stderr if stderr else None
             }
         else:
             logger.info(f"Functional mismatch: {error_rate*100:.1f}% of test cases failed (code compiled and ran successfully)")
             return {
                 "correct": False,
                 "error_rate": error_rate,
-                "stdout": stdout[:500],
-                "stderr": stderr[:500] if stderr else None
+                "stdout": stdout,  # Full output
+                "stderr": stderr if stderr else None
             }
 
     except Exception as e:
@@ -358,7 +358,7 @@ def compute_score(
                 verification_results.append({
                     "correct": False,
                     "parse_error": f"Golden code parsing failed: {str(e)}",
-                    "golden_code_preview": golden_code[:200] if golden_code else None,
+                    "golden_code": golden_code if golden_code else None,  # Full code
                 })
                 rewards.append(0.0)
                 continue
@@ -374,8 +374,8 @@ def compute_score(
                 verification_results.append({
                     "correct": False,
                     "parse_error": f"Generated code parsing failed: {str(e)}",
-                    "extracted_answer_preview": extracted_answer[:200] if extracted_answer else None,
-                    "golden_code_preview": golden_code[:200] if golden_code else None,
+                    "extracted_answer": extracted_answer if extracted_answer else None,  # Full code
+                    "golden_code": golden_code if golden_code else None,  # Full code
                 })
                 rewards.append(0.0)
                 continue
@@ -428,7 +428,18 @@ def compute_score(
                     elif "parse_error" in result:
                         error_msgs.append(result["parse_error"])
                     elif result.get("api_status") and result["api_status"] != "Success":
-                        error_msgs.append(f"API status: {result['api_status']}")
+                        api_status = result.get("api_status")
+                        compile_stderr = result.get("compile_stderr", "")
+                        run_stderr = result.get("run_stderr", "")
+
+                        # Build detailed error message with full stderr (no length limit)
+                        error_parts = [f"API status: {api_status}"]
+                        if compile_stderr:
+                            error_parts.append(f"Compile error: {compile_stderr}")
+                        if run_stderr:
+                            error_parts.append(f"Run error: {run_stderr}")
+
+                        error_msgs.append(" | ".join(error_parts))
 
             # Raise exception if all variants failed with actual errors (not just wrong answers)
             if not has_functional_mismatch and error_msgs:

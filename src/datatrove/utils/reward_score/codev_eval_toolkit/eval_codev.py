@@ -132,9 +132,15 @@ def extract_verilog(verilog_code):
     for pattern in patterns:
         matches = re.findall(pattern, verilog_code)
         if matches:
-            extracted = matches[-1]
-            # Clean: extract only module...endmodule blocks
-            return _extract_module_blocks(extracted)
+            # Find the last match that contains "module" keyword
+            for match in reversed(matches):
+                extracted = _extract_module_blocks(match)
+                if extracted and "module" in extracted:
+                    return extracted
+            # Fallback: if no match has module, try last match anyway
+            extracted = _extract_module_blocks(matches[-1])
+            if extracted:
+                return extracted
 
     # Fallback: Extract plain text with module keyword (Qwen3 format)
     if "module" in verilog_code and "endmodule" in verilog_code:
