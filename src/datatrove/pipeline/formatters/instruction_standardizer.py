@@ -495,6 +495,12 @@ class InstructionStandardizer(PipelineStep):
                     # Update the document if text changed
                     if standardized_content != original_content:
                         user_message["content"] = standardized_content
+
+                        # Add format version metadata for tracking and migration
+                        if not doc.metadata:
+                            doc.metadata = {}
+                        doc.metadata["_instruction_format_version"] = "1.0"
+
                         self.stat_update("standardized")
 
                         # Update domain-specific stats

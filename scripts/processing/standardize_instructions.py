@@ -106,6 +106,32 @@ def extract_problem_text(row_dict: dict) -> str:
     return ""
 
 
+def extract_problem_section(text: str) -> str:
+    """Extract only the Problem section from standardized instruction format.
+
+    This ensures deduplication is based solely on problem content,
+    not on format changes (e.g., adding Implementation Requirements section).
+
+    Args:
+        text: Full instruction text with sections
+
+    Returns:
+        Problem section content only, or full text if no Problem section found
+    """
+    if not text:
+        return ""
+
+    # Try to extract Problem section using regex
+    # Match: ## Problem\n ... until next ## or end of string
+    match = re.search(r'## Problem\n(.*?)(?=\n##|$)', text, re.DOTALL)
+
+    if match:
+        return match.group(1).strip()
+
+    # If no Problem section found, return full text (backward compatibility)
+    return text.strip()
+
+
 def process_dataset(
     input_file: str,
     output_file: str,
@@ -218,7 +244,9 @@ def process_dataset(
             if doc.metadata and 'prompt' in doc.metadata:
                 problem_text = extract_problem_text(doc.metadata)
                 if problem_text:
-                    problem_hash = compute_hash(problem_text)
+                    # Extract ONLY Problem section for consistent hashing across format changes
+                    problem_section = extract_problem_section(problem_text)
+                    problem_hash = compute_hash(problem_section)
 
                     # Check for duplicate
                     if problem_hash in hash_set:
@@ -227,7 +255,7 @@ def process_dataset(
 
                     # Add to unique set
                     hash_set.add(problem_hash)
-                    hash_to_text[problem_hash] = problem_text[:100]  # Store snippet
+                    hash_to_text[problem_hash] = problem_section[:100]  # Store snippet
 
                     # Keep this example
                     batch_data.append(doc.metadata)
