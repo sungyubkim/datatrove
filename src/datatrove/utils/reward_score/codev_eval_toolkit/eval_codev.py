@@ -158,30 +158,30 @@ def extract_verilog(verilog_code):
         None: If no valid modules found
     """
     # Try multiple markdown formats
+    # Note: (?!\w) negative lookahead prevents "v" from matching "verilog"
     patterns = [
         r"```verilog\s*([\s\S]*?)\s*```",
-        r"```v\s*([\s\S]*?)\s*```",
+        r"```v(?!\w)\s*([\s\S]*?)\s*```",         # Not followed by word char
         r"```systemverilog\s*([\s\S]*?)\s*```",
-        r"```sv\s*([\s\S]*?)\s*```",
+        r"```sv(?!\w)\s*([\s\S]*?)\s*```",        # Not followed by word char
     ]
+
+    # Collect modules from ALL patterns, not just the first matching one
+    all_modules = []
 
     for pattern in patterns:
         matches = re.findall(pattern, verilog_code)
-        if matches:
-            # Collect modules from ALL code blocks, not just the last one
-            all_modules = []
+        for match in matches:
+            extracted = _extract_module_blocks(match)
+            # Collect modules from this block
+            if isinstance(extracted, list) and extracted:
+                all_modules.extend(extracted)  # Add all modules from this block
+            elif isinstance(extracted, str) and "module" in extracted:
+                all_modules.append(extracted)  # Add single module
 
-            for match in matches:  # Process ALL matches (not reversed)
-                extracted = _extract_module_blocks(match)
-                # Collect modules from this block
-                if isinstance(extracted, list) and extracted:
-                    all_modules.extend(extracted)  # Add all modules from this block
-                elif isinstance(extracted, str) and "module" in extracted:
-                    all_modules.append(extracted)  # Add single module
-
-            # If we found any modules across all blocks, return them
-            if all_modules:
-                return all_modules
+    # If we found any modules across all patterns and blocks, return them
+    if all_modules:
+        return all_modules
 
     # Fallback: Extract plain text with module keyword (Qwen3 format)
     if "module" in verilog_code and "endmodule" in verilog_code:
