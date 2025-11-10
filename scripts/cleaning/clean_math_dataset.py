@@ -195,7 +195,10 @@ def clean_and_write_dataset(
         # Get counts from cleaner stats (MetricStats objects have .total attribute)
         for stat_name in ["modified", "unchanged", "problem_number_removed",
                           "contest_metadata_removed", "point_allocation_removed",
-                          "markdown_header_removed", "image_reference_detected"]:
+                          "markdown_header_removed", "author_attribution_removed",
+                          "trailing_artifact_removed", "special_artifact_removed",
+                          "filtered_url_sample", "filtered_multipart_sample",
+                          "image_reference_detected"]:
             if stat_name in cleaner_stats:
                 # MetricStats.total gives us the count
                 stats[stat_name] = int(cleaner_stats[stat_name].total)
@@ -249,7 +252,16 @@ Problem numbers removed:     {stats.get('problem_number_removed', 0):,} samples
 Contest metadata removed:    {stats.get('contest_metadata_removed', 0):,} samples
 Point allocations removed:   {stats.get('point_allocation_removed', 0):,} samples
 Markdown headers removed:    {stats.get('markdown_header_removed', 0):,} samples
+Author attributions removed: {stats.get('author_attribution_removed', 0):,} samples
+Trailing artifacts removed:  {stats.get('trailing_artifact_removed', 0):,} samples
+Special artifacts removed:   {stats.get('special_artifact_removed', 0):,} samples
 Image references detected:   {stats.get('image_reference_detected', 0):,} samples
+
+Samples Filtered Out (Deleted):
+{'─'*70}
+URL samples filtered:        {stats.get('filtered_url_sample', 0):,} samples
+Multi-part samples filtered: {stats.get('filtered_multipart_sample', 0):,} samples
+Total filtered:              {stats.get('filtered_url_sample', 0) + stats.get('filtered_multipart_sample', 0):,} samples
 
 {'='*70}
 Sample Documents ({len(comparison_examples)} collected)

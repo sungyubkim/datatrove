@@ -313,6 +313,43 @@ class TestMathDatasetCleanerOpenR1:
 
         assert result.metadata["prompt"][0]["content"] == "Find all solutions to the equation $x^2 - 5x + 6 = 0$."
 
+    def test_multiple_choice_options_preserved(self):
+        """Regression test: Multiple-choice options C. and D. should NOT be removed.
+
+        These are NOT Roman numerals in this context - they're multiple-choice labels.
+        The Roman numeral pattern should only match multi-letter sequences (II., III., IV.)
+        to avoid removing single-letter options like C. (100), D. (500), M. (1000), I. (1).
+        """
+        doc = Document(
+            id="test-mcq-1",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Which ancient civilization made the greatest contributions to mathematics?\n"
+                            "A. Indians\n"
+                            "B. China\n"
+                            "C. Babylon\n"
+                            "D. Arabs"
+                        ),
+                    }
+                ],
+                "ground_truth": "A",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+        content = result.metadata["prompt"][0]["content"]
+
+        # All options should be preserved with their labels
+        assert "A. Indians" in content
+        assert "B. China" in content
+        assert "C. Babylon" in content, "Option C. should NOT be removed (not a Roman numeral section header)"
+        assert "D. Arabs" in content, "Option D. should NOT be removed (not a Roman numeral section header)"
+
     def test_openr1_task_prefix(self):
         """OpenR1 NEW: 'Task 2. Solve for x...'"""
         doc = Document(
@@ -443,6 +480,111 @@ class TestMathDatasetCleanerOpenR1:
         result = list(cleaner.run([doc], rank=0, world_size=1))[0]
 
         assert result.metadata["prompt"][0]["content"] == "Solve the equation $x^2 = 9$."
+
+    def test_openr1_example_without_punctuation(self):
+        """OpenR1 NEW: 'Example 4 Given that...' (no colon/period)"""
+        doc = Document(
+            id="test-openr1-15",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "Example 4 Given that $\\alpha^{2005}+\\beta^{2005}$ can be expressed as a bivariate polynomial.",
+                    }
+                ],
+                "ground_truth": "42",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("openr1-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        assert result.metadata["prompt"][0]["content"] == "Given that $\\alpha^{2005}+\\beta^{2005}$ can be expressed as a bivariate polynomial."
+
+    def test_openr1_topic_label_square_brackets(self):
+        """OpenR1 NEW: '[ Invariants ] On the board...'"""
+        doc = Document(
+            id="test-openr1-16",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "[ Invariants ]\n\nOn the board, the numbers $1,2, \\ldots, 20$ are written.",
+                    }
+                ],
+                "ground_truth": "210",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("openr1-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        assert result.metadata["prompt"][0]["content"] == "On the board, the numbers $1,2, \\ldots, 20$ are written."
+
+    def test_openr1_proof_prefix(self):
+        """OpenR1 NEW: 'Proof: Consider the...'"""
+        doc = Document(
+            id="test-openr1-17",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "Proof: Consider the following inequality: $a^2 + b^2 \\geq 2ab$.",
+                    }
+                ],
+                "ground_truth": "True",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("openr1-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        assert result.metadata["prompt"][0]["content"] == "Consider the following inequality: $a^2 + b^2 \\geq 2ab$."
+
+    def test_openr1_hint_prefix(self):
+        """OpenR1 NEW: 'Hint: Use the quadratic formula...'"""
+        doc = Document(
+            id="test-openr1-18",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "Hint: Use the quadratic formula to solve $x^2 + 5x + 6 = 0$.",
+                    }
+                ],
+                "ground_truth": "x=-2,-3",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("openr1-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        assert result.metadata["prompt"][0]["content"] == "Use the quadratic formula to solve $x^2 + 5x + 6 = 0$."
+
+    def test_openr1_note_prefix(self):
+        """OpenR1 NEW: 'Note. The triangle is isosceles...'"""
+        doc = Document(
+            id="test-openr1-19",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "Note. The triangle is isosceles with sides $a = b = 5$.",
+                    }
+                ],
+                "ground_truth": "5",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("openr1-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        assert result.metadata["prompt"][0]["content"] == "The triangle is isosceles with sides $a = b = 5$."
 
 
 class TestMathDatasetCleanerSkywork:
@@ -830,6 +972,1051 @@ class TestMathDatasetCleanerImageDetection:
 
         # Figure reference should be detected but NOT removed
         assert "Figure 1" in result.metadata["prompt"][0]["content"]
+
+
+class TestMathDatasetCleanerNewFeatures:
+    """Tests for new artifact removal and filtering features."""
+
+    def test_task_label_b34_format(self):
+        """Test removal of 'Task B-3.4.' format"""
+        doc = Document(
+            id="test-new-1",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "Task B-3.4. Solve the equation $x^{\\log _{5} 6}-5 \\cdot 6^{\\log _{5} \\sqrt{x}}=6$.",
+                    }
+                ],
+                "ground_truth": "25",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        assert result.metadata["prompt"][0]["content"] == "Solve the equation $x^{\\log _{5} 6}-5 \\cdot 6^{\\log _{5} \\sqrt{x}}=6$."
+        assert result.metadata["ground_truth"] == "25"
+
+    def test_author_attribution_removal(self):
+        """Test removal of author attribution in LaTeX underline format"""
+        doc = Document(
+            id="test-new-2",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "$\\underline{\\text { Khachaturyan A.V. }}$\n\n13 children sat at a round table.",
+                    }
+                ],
+                "ground_truth": "7",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        assert result.metadata["prompt"][0]["content"] == "13 children sat at a round table."
+        assert result.metadata["ground_truth"] == "7"
+
+    def test_translation_instruction_removal(self):
+        """Test removal of 'Translate the above text into English...' instruction"""
+        doc = Document(
+            id="test-new-3",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "$7.9 \\quad 3 \\cdot 5^{2x-1}-2 \\cdot 5^{x-1}=0.2$.\n\nTranslate the above text into English, keeping the original text's line breaks and format, and output the translation result directly.",
+                    }
+                ],
+                "ground_truth": "0",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        # Translation instruction should be removed
+        assert "Translate the above text" not in result.metadata["prompt"][0]["content"]
+        assert "$7.9 \\quad 3 \\cdot 5^{2x-1}-2 \\cdot 5^{x-1}=0.2$." in result.metadata["prompt"][0]["content"]
+        assert result.metadata["ground_truth"] == "0"
+
+    def test_url_filtering(self):
+        """Test filtering out samples with URLs"""
+        doc = Document(
+            id="test-new-4",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "Let $S$ be a [set](https://artofproblemsolving.com/wiki/index.php/Set) with six elements.",
+                    }
+                ],
+                "ground_truth": "710",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))
+
+        # Sample should be filtered out (empty result)
+        assert len(result) == 0
+
+    def test_multipart_filtering(self):
+        """Test filtering out multi-part problems with a), b), c)"""
+        doc = Document(
+            id="test-new-5",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "a) Calculate the total amount of milk in liters.\n\nb) Calculate the smallest possible number of tankers.",
+                    }
+                ],
+                "ground_truth": "4",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))
+
+        # Sample should be filtered out (empty result)
+        assert len(result) == 0
+
+    def test_url_filtering_disabled(self):
+        """Test that URL filtering can be disabled"""
+        doc = Document(
+            id="test-new-6",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "Visit https://example.com for more information about this problem.",
+                    }
+                ],
+                "ground_truth": "42",
+            },
+        )
+
+        cleaner = MathDatasetCleaner(filter_url_samples=False)
+        result = list(cleaner.run([doc], rank=0, world_size=1))
+
+        # Sample should NOT be filtered out when filtering is disabled
+        assert len(result) == 1
+        assert result[0].metadata["ground_truth"] == "42"
+
+    def test_multipart_filtering_disabled(self):
+        """Test that multipart filtering can be disabled"""
+        doc = Document(
+            id="test-new-7",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "a) Prove that X. b) Find Y.",
+                    }
+                ],
+                "ground_truth": "5",
+            },
+        )
+
+        cleaner = MathDatasetCleaner(filter_multipart_samples=False)
+        result = list(cleaner.run([doc], rank=0, world_size=1))
+
+        # Sample should NOT be filtered out when filtering is disabled
+        assert len(result) == 1
+        assert result[0].metadata["ground_truth"] == "5"
+
+
+def test_multipart_false_positive_function_notation():
+    """Test that function notation like f(x), g(y) is NOT filtered as multipart."""
+    doc = Document(
+        id="test-fp-1",
+        text="",
+        metadata={
+            "prompt": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Given that f(x) is a function defined on R, and satisfies "
+                        "f(x+2)[1-f(x)]=1+f(x), f(1)=9997, then the value of f(2009) is ___."
+                    ),
+                }
+            ],
+            "ground_truth": "42",
+        },
+    )
+
+    cleaner = MathDatasetCleaner(filter_multipart_samples=True)
+    result = list(cleaner.run([doc], rank=0, world_size=1))
+
+    # Should NOT be filtered (function notation, not multipart problem)
+    assert len(result) == 1
+
+
+def test_multipart_false_positive_coordinates():
+    """Test that coordinate notation like (a, b) is NOT filtered as multipart."""
+    doc = Document(
+        id="test-fp-2",
+        text="",
+        metadata={
+            "prompt": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Find the distance between points (a, b) and (c, d) "
+                        "in the coordinate plane."
+                    ),
+                }
+            ],
+            "ground_truth": "sqrt((c-a)^2 + (d-b)^2)",
+        },
+    )
+
+    cleaner = MathDatasetCleaner(filter_multipart_samples=True)
+    result = list(cleaner.run([doc], rank=0, world_size=1))
+
+    # Should NOT be filtered (coordinate notation, not multipart problem)
+    assert len(result) == 1
+
+
+def test_multipart_false_positive_math_expression():
+    """Test that math expressions like ab=2(a+b) are NOT filtered as multipart."""
+    doc = Document(
+        id="test-fp-3",
+        text="",
+        metadata={
+            "prompt": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Solve the equation where ab=2(a+b), bc=3(b+c), and cd=4(c+d). "
+                        "Find the value of d."
+                    ),
+                }
+            ],
+            "ground_truth": "24",
+        },
+    )
+
+    cleaner = MathDatasetCleaner(filter_multipart_samples=True)
+    result = list(cleaner.run([doc], rank=0, world_size=1))
+
+    # Should NOT be filtered (variable expression, not multipart problem)
+    assert len(result) == 1
+
+
+def test_multipart_false_positive_gcd_notation():
+    """Test that function calls like gcd(a, b) are NOT filtered as multipart."""
+    doc = Document(
+        id="test-fp-4",
+        text="",
+        metadata={
+            "prompt": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Let p be a prime and A be a set such that for any subset, "
+                        "the product is not a perfect p-th power. What is the largest "
+                        "possible number of elements in A?"
+                    ),
+                }
+            ],
+            "ground_truth": "p-1",
+        },
+    )
+
+    cleaner = MathDatasetCleaner(filter_multipart_samples=True)
+    result = list(cleaner.run([doc], rank=0, world_size=1))
+
+    # Should NOT be filtered (variable in context, not multipart problem)
+    assert len(result) == 1
+
+
+def test_multipart_true_positive_with_newlines():
+    """Test that true multipart problems with a), b) structure ARE filtered."""
+    doc = Document(
+        id="test-tp-1",
+        text="",
+        metadata={
+            "prompt": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Consider the quadratic equation x^2 - 3px - p = 0.\n\n"
+                        "a) Prove that 3px1 + x2^2 - p > 0.\n\n"
+                        "b) Find the least possible value of the expression A."
+                    ),
+                }
+            ],
+            "ground_truth": "5",
+        },
+    )
+
+    cleaner = MathDatasetCleaner(filter_multipart_samples=True)
+    result = list(cleaner.run([doc], rank=0, world_size=1))
+
+    # Should be filtered (true multipart problem with a), b) structure)
+    assert len(result) == 0
+
+
+def test_multipart_true_positive_sequential_parts():
+    """Test that problems with sequential a), b), c) parts ARE filtered."""
+    doc = Document(
+        id="test-tp-2",
+        text="",
+        metadata={
+            "prompt": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Point D lies on side AC of triangle ABC.\n\n"
+                        "a) Find the angle ABC.\n\n"
+                        "b) Suppose MP=1, NT=3/2, BD=sqrt(5). Find the area.\n\n"
+                        "c) Verify your answer using the Pythagorean theorem."
+                    ),
+                }
+            ],
+            "ground_truth": "15",
+        },
+    )
+
+    cleaner = MathDatasetCleaner(filter_multipart_samples=True)
+    result = list(cleaner.run([doc], rank=0, world_size=1))
+
+    # Should be filtered (true multipart problem with a), b), c) structure)
+    assert len(result) == 0
+
+
+def test_multipart_roman_numeral_true_positive():
+    """Test that Roman numeral multipart problems like (I), (II) ARE filtered."""
+    doc = Document(
+        id="test-roman-tp-1",
+        text="",
+        metadata={
+            "prompt": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Let the function $f(x)=\\sin x+\\sqrt{3} \\cos x+1$,\n"
+                        "(I) Find the maximum and minimum values of the function $f(x)$ on $\\left[0, \\frac{\\pi}{2}\\right]$;\n"
+                        "(II) If real numbers $a, b, c$ satisfy $a f(x)+b f(x-c)=1$ for any $x \\in \\mathbb{R}$, "
+                        "find the value of $\\frac{b \\cos c}{a}$."
+                    ),
+                }
+            ],
+            "ground_truth": "-1",
+        },
+    )
+
+    cleaner = MathDatasetCleaner(filter_multipart_samples=True)
+    result = list(cleaner.run([doc], rank=0, world_size=1))
+
+    # Should be filtered (true multipart problem with Roman numeral structure)
+    assert len(result) == 0
+
+
+def test_multipart_roman_numeral_false_positive():
+    """Test that Roman numeral function notation like f(I) is NOT filtered as multipart."""
+    doc = Document(
+        id="test-roman-fp-1",
+        text="",
+        metadata={
+            "prompt": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Let f be a function defined on interval I=[0,1] such that "
+                        "f(I) is a compact subset of R. Prove that f is uniformly continuous."
+                    ),
+                }
+            ],
+            "ground_truth": "proof required",
+        },
+    )
+
+    cleaner = MathDatasetCleaner(filter_multipart_samples=True)
+    result = list(cleaner.run([doc], rank=0, world_size=1))
+
+    # Should NOT be filtered (not a multipart problem, just function notation)
+    assert len(result) == 1
+
+
+def test_multipart_roman_numeral_three_parts():
+    """Test that three-part Roman numeral problems (I), (II), (III) ARE filtered."""
+    doc = Document(
+        id="test-roman-tp-2",
+        text="",
+        metadata={
+            "prompt": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Given the function $f(x)=\\sin \\left(x+\\frac{\\pi}{6}\\right)+\\sin \\left(x-\\frac{\\pi}{6}\\right)+\\cos x+a$\n"
+                        "(I) Find the smallest positive period of the function $f(x)$.\n"
+                        "(II) If the maximum value of $f(x)$ is 1, find the value of $a$.\n"
+                        "(III) If $x \\in\\left[-\\frac{\\pi}{2}, \\frac{\\pi}{2}\\right]$ when the maximum value "
+                        "of $f(x)$ is 1, find the value of $a$."
+                    ),
+                }
+            ],
+            "ground_truth": "-1",
+        },
+    )
+
+    cleaner = MathDatasetCleaner(filter_multipart_samples=True)
+    result = list(cleaner.run([doc], rank=0, world_size=1))
+
+    # Should be filtered (true multipart problem with 3 parts)
+    assert len(result) == 0
+
+
+class TestMathDatasetCleanerNewArtifacts:
+    """Tests for new artifact removal features: trailing artifacts and standalone numbers."""
+
+    def test_trailing_markdown_header_sample_6(self):
+        """User Sample 6: Remove '## second grade' at end of problem"""
+        doc = Document(
+            id="test-trailing-1",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Ana, Biljana, Vesna, and Gordana crossed the river in a canoe as follows: "
+                            "There were three trips from the left to the right bank, each time with two "
+                            "girls in the canoe, one of whom was rowing. On both trips from the right bank "
+                            "to the left, there was only one girl in the canoe. It is known that Ana "
+                            "can only row if she is alone in the canoe, and Biljana can row if she is alone "
+                            "or with Vesna. It is also known that each girl rowed at least once. "
+                            "Which of them rowed twice?\n\n## second grade"
+                        ),
+                    }
+                ],
+                "ground_truth": "Vesna",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        content = result.metadata["prompt"][0]["content"]
+        assert "## second grade" not in content
+        assert "Which of them rowed twice?" in content
+        assert result.metadata["ground_truth"] == "Vesna"
+
+    def test_standalone_number_147(self):
+        """User Sample 15: Remove '147 ' at start before 'Let'"""
+        doc = Document(
+            id="test-standalone-1",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "147 Let $x, y, z > 0$ and $x + y + z = 1$, then the minimum value of $\\frac{1}{x} + \\frac{4}{y} + \\frac{9}{z}$ is",
+                    }
+                ],
+                "ground_truth": "36",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        content = result.metadata["prompt"][0]["content"]
+        assert not content.startswith("147 ")
+        assert content.startswith("Let $x, y, z > 0$")
+        assert result.metadata["ground_truth"] == "36"
+
+    def test_standalone_number_1_find(self):
+        """User Sample 13: Remove '1. ' at start"""
+        doc = Document(
+            id="test-standalone-2",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "1. Find the sum of the squares of two numbers if it is known that their arithmetic mean is 8, and the geometric mean is $2 \\sqrt{5}$.",
+                    }
+                ],
+                "ground_truth": "216",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        content = result.metadata["prompt"][0]["content"]
+        assert not content.startswith("1. ")
+        assert content.startswith("Find the sum")
+        assert result.metadata["ground_truth"] == "216"
+
+    def test_contest_metadata_ico_2021(self):
+        """User Sample 17: Contest metadata already handled by existing patterns"""
+        doc = Document(
+            id="test-contest-1",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "(The 2021 ICO P4)\n\n"
+                            "The path index of a graph $G$ is the minimum number of paths needed to pass through "
+                            "each vertex of $G$ exactly once. Given a connected graph $G$, what is the maximum "
+                            "possible value for its path index, knowing that the largest set of vertices in $G$ "
+                            "that are pairwise non-adjacent is $n>1$ (independence number)?"
+                        ),
+                    }
+                ],
+                "ground_truth": "n-1",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        content = result.metadata["prompt"][0]["content"]
+        assert "(The 2021 ICO P4)" not in content
+        assert content.startswith("The path index")
+        assert result.metadata["ground_truth"] == "n-1"
+
+    def test_trailing_bold_label(self):
+        """Test removal of bold labels at end like '**Level 3**'"""
+        doc = Document(
+            id="test-trailing-2",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "Calculate the value of $\\sqrt{144}$.\n\n**Level 3**",
+                    }
+                ],
+                "ground_truth": "12",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        content = result.metadata["prompt"][0]["content"]
+        assert "**Level 3**" not in content
+        assert "Calculate the value" in content
+
+    def test_trailing_category_label(self):
+        """Test removal of category labels at end like '[ Geometry ]'"""
+        doc = Document(
+            id="test-trailing-3",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "Find the area of a circle with radius 5.\n\n[ Geometry ]",
+                    }
+                ],
+                "ground_truth": "25\\pi",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        content = result.metadata["prompt"][0]["content"]
+        assert "[ Geometry ]" not in content
+        assert "Find the area" in content
+
+    def test_false_positive_year_in_middle(self):
+        """False positive: Year in middle of text should NOT be removed"""
+        doc = Document(
+            id="test-fp-year-1",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "In 2024, a mathematician discovered that 147 primes exist in a certain sequence.",
+                    }
+                ],
+                "ground_truth": "147",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        content = result.metadata["prompt"][0]["content"]
+        # "2024" and "147" should NOT be removed (not at start with capital letter after)
+        assert "In 2024" in content
+        assert "147 primes" in content
+
+    def test_false_positive_number_in_problem(self):
+        """False positive: Numbers that are part of the problem should NOT be removed"""
+        doc = Document(
+            id="test-fp-number-1",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "Calculate 147 * 2 and then find the square root of the result.",
+                    }
+                ],
+                "ground_truth": "\\sqrt{294}",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        content = result.metadata["prompt"][0]["content"]
+        # "147" should NOT be removed (not followed by capitalized word at start)
+        assert "Calculate 147 * 2" in content
+
+    def test_false_positive_markdown_in_middle(self):
+        """False positive: Markdown headers in middle should NOT be removed"""
+        doc = Document(
+            id="test-fp-markdown-1",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "Consider the following:\n\n## Part A\n\nFind x such that x^2 = 4.\n\n## Part B\n\nFind y such that y^2 = 9.",
+                    }
+                ],
+                "ground_truth": "x=±2, y=±3",
+            },
+        )
+
+        # Use cleaner WITHOUT trailing artifacts enabled (default)
+        cleaner = MathDatasetCleaner(
+            remove_problem_numbers=True,
+            remove_markdown_headers=True,  # Only removes at START
+            remove_trailing_artifacts=False,  # Don't remove at END
+        )
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        content = result.metadata["prompt"][0]["content"]
+        # Middle headers should remain (only trailing headers are removed when enabled)
+        assert "## Part A" in content
+        assert "## Part B" in content
+
+    def test_trailing_artifacts_disabled_by_default(self):
+        """Test that trailing artifact removal is disabled by default"""
+        doc = Document(
+            id="test-disabled-1",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "Solve for x in the equation $2x + 3 = 7$.\n\n## Level 2",
+                    }
+                ],
+                "ground_truth": "2",
+            },
+        )
+
+        # Default cleaner should NOT remove trailing artifacts
+        cleaner = MathDatasetCleaner()
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        content = result.metadata["prompt"][0]["content"]
+        # Trailing header should remain (feature disabled by default)
+        assert "## Level 2" in content
+
+    def test_standalone_number_only_1_to_3_digits(self):
+        """Test that standalone number pattern only matches 1-3 digits"""
+        doc = Document(
+            id="test-standalone-3",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "2024 In this year, a new theorem was discovered about prime numbers.",
+                    }
+                ],
+                "ground_truth": "N/A",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        content = result.metadata["prompt"][0]["content"]
+        # "2024" should NOT be removed (4 digits, pattern only matches 1-3 digits)
+        assert content.startswith("2024 In")
+
+    def test_multiple_trailing_artifacts(self):
+        """Test removal of multiple trailing artifacts"""
+        doc = Document(
+            id="test-trailing-4",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "Find all prime numbers less than 20.\n\n## Number Theory\n\n**Easy**",
+                    }
+                ],
+                "ground_truth": "2, 3, 5, 7, 11, 13, 17, 19",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        content = result.metadata["prompt"][0]["content"]
+        assert "## Number Theory" not in content
+        assert "**Easy**" not in content
+        assert "Find all prime numbers" in content
+
+    def test_bracket_number_12(self):
+        """Test removal of bracket number '[12] ' at start"""
+        doc = Document(
+            id="test-bracket-1",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "[12] Find the number of subsets $S$ of $\\{1,2, \\ldots 6\\}$ satisfying the following conditions: S is non-empty.",
+                    }
+                ],
+                "ground_truth": "N/A",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        content = result.metadata["prompt"][0]["content"]
+        assert not content.startswith("[12] ")
+        assert content.startswith("Find the number of subsets")
+
+    def test_task_dash_format(self):
+        """Test removal of 'Task 2 - 200512 ' format"""
+        doc = Document(
+            id="test-task-dash-1",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "Task 2 - 200512 To transport a certain amount of gravel, a truck with a 5 t loading capacity would have had to make exactly 105 fully loaded trips.",
+                    }
+                ],
+                "ground_truth": "N/A",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        content = result.metadata["prompt"][0]["content"]
+        assert not content.startswith("Task 2 - 200512 ")
+        assert content.startswith("To transport a certain amount")
+
+    def test_multi_letter_country_code(self):
+        """Test removal of 'N8 (IRN) ' format with multi-letter prefix"""
+        doc = Document(
+            id="test-country-code-1",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "N8 (IRN) Let $p$ be a prime number and let $A$ be a set of positive integers.",
+                    }
+                ],
+                "ground_truth": "N/A",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        content = result.metadata["prompt"][0]["content"]
+        assert not content.startswith("N8 (IRN) ")
+        assert content.startswith("Let $p$ be a prime number")
+
+    def test_quoted_contest_name(self):
+        """Test removal of '(8th "Hope Cup" ...)' format"""
+        doc = Document(
+            id="test-quoted-contest-1",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": '(8th "Hope Cup" Invitational Competition Question) If $a+b+c=1$, what is the maximum value?',
+                    }
+                ],
+                "ground_truth": "N/A",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        content = result.metadata["prompt"][0]["content"]
+        assert "(8th" not in content
+        assert '"Hope Cup"' not in content
+        assert content.startswith("If $a+b+c=1$")
+
+    def test_latex_author_with_brackets(self):
+        """Test removal of '$ [ topic ] Author: Name $' format"""
+        doc = Document(
+            id="test-latex-author-1",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "$ [ Extreme principle (other) . ] Author: Shapovalov $A . B$. In a $29 \\times 29$ table, the numbers were written.",
+                    }
+                ],
+                "ground_truth": "N/A",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))[0]
+
+        content = result.metadata["prompt"][0]["content"]
+        assert "Extreme principle" not in content
+        assert "Shapovalov" not in content
+        assert content.startswith("In a $29 \\times 29$ table")
+
+    def test_multipart_lowercase_roman_numerals(self):
+        """Test filtering of multipart problems with lowercase roman numerals: (i)...(ii)..."""
+        doc = Document(
+            id="test-multipart-roman-1",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "(i) Find all integers $n \\geqslant 1$ such that $n$ divides $2^{n}-1$.\n\n(ii) Find all odd integers $n \\geqslant 1$ such that $n$ divides $3^{n}+1$.",
+                    }
+                ],
+                "ground_truth": "N/A",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))
+
+        # Document should be filtered out (empty list)
+        assert len(result) == 0
+
+    def test_multipart_false_positive_in_conditions(self):
+        """Test that (i), (ii) in problem conditions are NOT filtered (lowercase after pattern)"""
+        doc = Document(
+            id="test-multipart-false-positive-1",
+            text="",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "N8 (IRN) Let $p$ be a prime number satisfying: (i) the set of prime divisors of elements in $A$ consists of $p-1$ elements; (ii) for any nonempty subset of $A$, the product is not a perfect $p$ th power.",
+                    }
+                ],
+                "ground_truth": "N/A",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))
+
+        # Document should NOT be filtered (multipart pattern requires uppercase after)
+        assert len(result) == 1
+        content = result[0].metadata["prompt"][0]["content"]
+        # Should still have the problem (with N8 (IRN) removed)
+        assert "Let $p$ be a prime number" in content
+
+
+class TestMultilineFilteringIntegration:
+    """Integration tests for multiline-aware multi-part filtering.
+
+    Tests validate that the refactored filtering logic:
+    1. Does NOT filter false positives (equation/case references on same line)
+    2. DOES filter true positives (actual multi-part problems across lines)
+    """
+
+    # === False Positive Tests (should NOT be filtered) ===
+
+    def test_equation_reference_not_filtered(self):
+        """Equation references like 'equations $(1)$ and $(2)$' should NOT be filtered"""
+        doc = Document(
+            text="",
+            id="eq_ref_test",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "From equations $(1)$ and $(2)$, we can derive the final answer is 42.",
+                    }
+                ],
+                "ground_truth": "42",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))
+
+        assert len(result) == 1, "Equation reference should NOT be filtered"
+        assert result[0].metadata["prompt"][0]["content"] == "From equations $(1)$ and $(2)$, we can derive the final answer is 42."
+
+    def test_case_description_not_filtered(self):
+        """Case descriptions like 'cases (i) and (ii)' should NOT be filtered"""
+        doc = Document(
+            text="",
+            id="case_ref_test",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "In cases (i) and (ii), prove that the limit exists and equals zero.",
+                    }
+                ],
+                "ground_truth": "0",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))
+
+        assert len(result) == 1, "Case reference should NOT be filtered"
+        assert result[0].metadata["prompt"][0]["content"] == "In cases (i) and (ii), prove that the limit exists and equals zero."
+
+    def test_set_definition_not_filtered(self):
+        """Set definitions like 'Let $(I)$ be...' should NOT be filtered"""
+        doc = Document(
+            text="",
+            id="set_def_test",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "Let $(I)$ be set A and $(II)$ be set B, then prove intersection is empty.",
+                    }
+                ],
+                "ground_truth": "empty",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))
+
+        assert len(result) == 1, "Set definition should NOT be filtered"
+        assert result[0].metadata["prompt"][0]["content"] == "Let $(I)$ be set A and $(II)$ be set B, then prove intersection is empty."
+
+    def test_inline_roman_reference_not_filtered(self):
+        """Inline Roman numeral references should NOT be filtered"""
+        doc = Document(
+            text="",
+            id="inline_roman_test",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": "Compare theorems (i) and (ii) from the previous section and derive a new result.",
+                    }
+                ],
+                "ground_truth": "proven",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))
+
+        assert len(result) == 1, "Inline Roman reference should NOT be filtered"
+
+    # === True Positive Tests (should be filtered) ===
+
+    def test_multiline_dollar_arabic_filtered(self):
+        """Multi-line problems with $(1)$ and $(2)$ SHOULD be filtered"""
+        doc = Document(
+            text="",
+            id="multiline_arabic_test",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": """$(1)$ Calculate the area of the triangle.
+
+$(2)$ Find the perimeter of the circle.""",
+                    }
+                ],
+                "ground_truth": "multi-part",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))
+
+        assert len(result) == 0, "Multi-line dollar Arabic should be filtered"
+
+    def test_multiline_lowercase_roman_filtered(self):
+        """Multi-line problems with (i) and (ii) SHOULD be filtered"""
+        doc = Document(
+            text="",
+            id="multiline_roman_test",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": """(i) Prove the function is continuous.
+
+(ii) Show that the derivative exists everywhere.""",
+                    }
+                ],
+                "ground_truth": "multi-part",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))
+
+        assert len(result) == 0, "Multi-line lowercase Roman should be filtered"
+
+    def test_multiline_dollar_roman_filtered(self):
+        """Multi-line problems with $(I)$ and $(II)$ SHOULD be filtered"""
+        doc = Document(
+            text="",
+            id="multiline_dollar_roman_test",
+            metadata={
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": """$(I)$ Find all solutions to the equation.
+
+$(II)$ Verify each solution is valid.""",
+                    }
+                ],
+                "ground_truth": "multi-part",
+            },
+        )
+
+        cleaner = MathDatasetCleaner.from_preset("orz-math")
+        result = list(cleaner.run([doc], rank=0, world_size=1))
+
+        assert len(result) == 0, "Multi-line dollar Roman should be filtered"
 
 
 if __name__ == "__main__":
