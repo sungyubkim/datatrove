@@ -167,7 +167,7 @@ def normalize_usage(usage: dict | None) -> dict:
 
 
 def normalize_score(
-    score_result: dict, is_success: bool = True, error_msg: str = None
+    score_result: dict | None, is_success: bool = True, error_msg: str = None
 ) -> dict:
     """
     Normalize score results to a consistent schema for Parquet compatibility.
@@ -175,18 +175,22 @@ def normalize_score(
     compute_score now always returns a dict with score, reward_think, and reward_fmt fields.
     This function adds the error field for consistent Parquet schema.
 
+    When scoring fails, this function preserves partial results (reward_think, reward_fmt)
+    if they were computed before the error occurred.
+
     Args:
         score_result: Score dict from compute_score (with score, reward_think, reward_fmt)
+                     Can be None if scoring failed catastrophically before any results
         is_success: Whether inference succeeded
         error_msg: Error message if inference failed
 
     Returns:
         Normalized dict with consistent schema:
         {
-            "score": float,               # Always present
+            "score": float,               # Always present (0.0 on error)
             "error": str | None,          # None for success, error message for failure
-            "reward_think": float | None, # For math datasets, None/1.0 otherwise
-            "reward_fmt": float | None    # For math datasets, None/1.0 otherwise
+            "reward_think": float | None, # Preserved from score_result if available
+            "reward_fmt": float | None    # Preserved from score_result if available
         }
     """
     if is_success:
@@ -197,13 +201,23 @@ def normalize_score(
             "reward_fmt": score_result.get("reward_fmt", None),
         }
     else:
-        # Failure case
-        return {
-            "score": 0.0,
-            "error": error_msg if error_msg else "unknown",
-            "reward_think": None,
-            "reward_fmt": None,
-        }
+        # Failure case - preserve partial results if available
+        if score_result is not None and isinstance(score_result, dict):
+            # Partial results exist - preserve reward_think and reward_fmt
+            return {
+                "score": 0.0,
+                "error": error_msg if error_msg else "unknown",
+                "reward_think": score_result.get("reward_think", None),
+                "reward_fmt": score_result.get("reward_fmt", None),
+            }
+        else:
+            # Catastrophic failure - no partial results available
+            return {
+                "score": 0.0,
+                "error": error_msg if error_msg else "unknown",
+                "reward_think": None,
+                "reward_fmt": None,
+            }
 
 
 def reconstruct_inference_result(
@@ -294,10 +308,15 @@ def postprocess_and_score(runner: InferenceRunner, document: Document) -> Docume
                 # Check if compute_score returned an error (caught internally by scorer)
                 # Some scorers catch exceptions and return them as {"error": "..."} instead of raising
                 if "error" in score_dict and score_dict["error"] is not None:
-                    raise RuntimeError(score_dict["error"])
-
-                # Normalize score to consistent schema for Parquet compatibility
-                normalized_score = normalize_score(score_dict, is_success=True)
+                    # Preserve partial results (reward_think, reward_fmt) by passing score_dict
+                    normalized_score = normalize_score(
+                        score_dict,
+                        is_success=False,
+                        error_msg=score_dict["error"]
+                    )
+                else:
+                    # Success case - normalize score to consistent schema for Parquet compatibility
+                    normalized_score = normalize_score(score_dict, is_success=True)
             except Exception as e:
                 # Handle scoring errors (e.g., invalid format, API errors)
                 normalized_score = normalize_score(
