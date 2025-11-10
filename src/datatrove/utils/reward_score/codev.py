@@ -391,24 +391,35 @@ def compute_score(
                     continue
 
                 # Verify this module via Sandbox Fusion
-                result = verify_verilog_via_sandbox(
-                    golden_code=golden_code,
-                    dut_code=module_code,  # Test this specific module
-                    golden_top=golden_top,
-                    gate_top=gate_top,
-                    port_info=port_info,
-                    sandbox_fusion_url=sandbox_fusion_url,
-                    concurrent_semaphore=concurrent_semaphore
-                )
+                try:
+                    result = verify_verilog_via_sandbox(
+                        golden_code=golden_code,
+                        dut_code=module_code,  # Test this specific module
+                        golden_top=golden_top,
+                        gate_top=gate_top,
+                        port_info=port_info,
+                        sandbox_fusion_url=sandbox_fusion_url,
+                        concurrent_semaphore=concurrent_semaphore
+                    )
 
-                result["module_idx"] = module_idx
-                module_results.append(result)
+                    result["module_idx"] = module_idx
+                    module_results.append(result)
 
-                # If any module passes, consider this variant passed
-                if result.get("correct", False):
-                    logger.info(f"✓ Module {module_idx + 1} passed for variant {variant_key}")
-                    variant_passed = True
-                    break  # Early exit: one passing module is enough
+                    # If any module passes, consider this variant passed
+                    if result.get("correct", False):
+                        logger.info(f"✓ Module {module_idx + 1} passed for variant {variant_key}")
+                        variant_passed = True
+                        break  # Early exit: one passing module is enough
+
+                except Exception as e:
+                    # Log unexpected exception and continue to next module
+                    logger.error(f"Unexpected exception verifying module {module_idx + 1}: {e}", exc_info=True)
+                    module_results.append({
+                        "module_idx": module_idx,
+                        "correct": False,
+                        "unexpected_exception": str(e)
+                    })
+                    continue
 
             # Store results for this variant
             verification_results.append({
