@@ -290,6 +290,12 @@ def postprocess_and_score(runner: InferenceRunner, document: Document) -> Docume
                     ground_truth,
                     sandbox_fusion_url=SANDBOX_FUSION_URL,
                 )
+
+                # Check if compute_score returned an error (caught internally by scorer)
+                # Some scorers catch exceptions and return them as {"error": "..."} instead of raising
+                if "error" in score_dict and score_dict["error"] is not None:
+                    raise RuntimeError(score_dict["error"])
+
                 # Normalize score to consistent schema for Parquet compatibility
                 normalized_score = normalize_score(score_dict, is_success=True)
             except Exception as e:
