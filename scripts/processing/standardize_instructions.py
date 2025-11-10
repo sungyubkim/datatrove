@@ -32,6 +32,7 @@ Usage:
 import argparse
 import hashlib
 import json
+import re
 import time
 from collections import defaultdict
 from datetime import datetime
