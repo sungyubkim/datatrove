@@ -119,22 +119,15 @@ STANDARDIZATION_PRESETS = {
 class InstructionStandardizer(PipelineStep):
     """Standardize instruction formats for code generation datasets in VERL format.
 
-    Converts various instruction formats to a consistent CodeContests-style format:
+    Converts various instruction formats to a consistent structure (v1.2):
 
     ## Problem
     [Clear problem description]
 
     ## Constraints
-    - [Constraint 1: ranges, types, etc.]
-    - [Constraint 2: special conditions]
-    - Time Complexity: O(n) [if applicable]
-    - Space Complexity: O(1) [if applicable]
-
-    ## Input Format
-    [Input data structure and format]
-
-    ## Output Format
-    [Output data structure and format]
+    - [Constraint 1: novel info from problem narrative]
+    - [Constraint 2: behavioral/memory requirements]
+    (Note: Signal width/I/O info NOT duplicated - see Signal Interface)
 
     ## Example
     **Input:**
@@ -149,10 +142,18 @@ class InstructionStandardizer(PipelineStep):
 
     **Explanation:** [Example explanation]
 
+    ## Implementation Requirements
+    [Sandbox-optimized coding guidelines - domain-specific]
+
     ## [Domain-Specific Section]
     Python: Function Signature
-    Verilog: Signal Interface Table
+    Verilog: Signal Interface Table (contains ALL I/O specifications)
     Competitive: Additional Test Cases
+
+    Format Version History:
+    - v1.0: Basic 6-section format
+    - v1.1: Added Implementation Requirements (7-section)
+    - v1.2: Removed redundant Input/Output Format sections for Verilog (5-section)
 
     Args:
         domain: Target domain ("python", "verilog", "competitive", "auto")
@@ -368,18 +369,6 @@ class InstructionStandardizer(PipelineStep):
                 output_parts.append("- Not specified")
             output_parts.append("\n\n")
 
-        # Input Format section
-        if sections["input_format"] or self.extract_io_format:
-            output_parts.append("## Input Format\n")
-            output_parts.append(sections["input_format"] if sections["input_format"] else "Not specified")
-            output_parts.append("\n\n")
-
-        # Output Format section
-        if sections["output_format"] or self.extract_io_format:
-            output_parts.append("## Output Format\n")
-            output_parts.append(sections["output_format"] if sections["output_format"] else "Not specified")
-            output_parts.append("\n\n")
-
         # Example section
         if sections["examples"]:
             output_parts.append("## Example\n")
@@ -508,9 +497,10 @@ class InstructionStandardizer(PipelineStep):
                         # Add format version metadata for tracking and migration
                         # v1.0: Basic 6-section format
                         # v1.1: Added Implementation Requirements section (7-section)
+                        # v1.2: Removed redundant Input/Output Format sections (5-section, Verilog only)
                         if not doc.metadata:
                             doc.metadata = {}
-                        doc.metadata["_instruction_format_version"] = "1.1"
+                        doc.metadata["_instruction_format_version"] = "1.2"
 
                         self.stat_update("standardized")
 

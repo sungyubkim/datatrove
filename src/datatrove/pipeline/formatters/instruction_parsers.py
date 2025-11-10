@@ -48,15 +48,19 @@ class VerilogInstructionParser(InstructionParser):
 
     Verilog instructions typically contain:
     - Problem description with behavioral specifications
-    - Signal interface table (NOT "Input Format" section)
-    - Implicit constraints in description and table
+    - Signal interface table (contains ALL I/O information)
 
     This parser extracts:
-    - Input/Output signals from table
-    - Bit width constraints
-    - Timing constraints (delays, clock periods)
-    - Behavioral constraints (reset types, edge-triggered, synchronous/asynchronous)
-    - Memory/capacity constraints
+    - Problem description (narrative before table)
+    - Signal interface table (preserved as domain_specific section)
+    - Constraints from problem narrative only:
+      * Memory/capacity constraints
+      * Behavioral constraints (reset types, edge-triggered, etc.)
+      * Timing requirements mentioned in narrative
+      * Bit-width specifications from narrative
+
+    Note: Signal width/timing info in table is NOT duplicated into Constraints.
+    The Signal Interface table already contains complete I/O specifications.
     """
 
     def parse(self, text: str) -> Dict[str, str]:
@@ -84,33 +88,16 @@ class VerilogInstructionParser(InstructionParser):
             table_start = table_match.start()
             sections["problem"] = text[:table_start].strip()
 
-            # Extract table text
+            # Extract table text (preserve as Signal Interface section)
             table_text = table_match.group(1)
             sections["domain_specific"] = f"\n\n{table_text.strip()}"
 
-            # Parse signal table
-            input_signals, output_signals, signal_constraints = self._parse_signal_table(table_text)
-
-            # Format input/output sections
-            if input_signals:
-                sections["input_format"] = (
-                    "**Input Signals:**\n" +
-                    "\n".join(f"- {s}" for s in input_signals)
-                )
-
-            if output_signals:
-                sections["output_format"] = (
-                    "**Output Signals:**\n" +
-                    "\n".join(f"- {s}" for s in output_signals)
-                )
-
-            # Extract additional constraints from problem description
+            # Extract constraints ONLY from problem description (not from signal table)
+            # Signal table already contains all I/O info - no need to duplicate
             problem_constraints = self._extract_constraints_from_description(sections["problem"])
 
-            # Combine all constraints
-            all_constraints = signal_constraints + problem_constraints
-            if all_constraints:
-                sections["constraints"] = "\n".join(f"- {c}" for c in all_constraints)
+            if problem_constraints:
+                sections["constraints"] = "\n".join(f"- {c}" for c in problem_constraints)
         else:
             # No table found, use full text as problem
             sections["problem"] = text.strip()
