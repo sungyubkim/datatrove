@@ -102,7 +102,13 @@ def verify_one_sample_wrapper(args):
 
 
 def _extract_module_blocks(code):
-    """Extract only module...endmodule blocks from code, excluding testbenches."""
+    """Extract only module...endmodule blocks from code, excluding testbenches.
+
+    Returns:
+        list: List of individual module strings (non-testbench modules)
+        None: If all modules are testbenches or no modules found
+        str: Original code if no module blocks could be parsed
+    """
     # Remove comments first
     note_pattern = r"(//[^\n]*|/\*[\s\S]*?\*/)"
     code = re.sub(note_pattern, "", code)
@@ -134,7 +140,7 @@ def _extract_module_blocks(code):
                 filtered_modules.append(module_block)
 
         if filtered_modules:
-            return "\n\n".join(filtered_modules)
+            return filtered_modules  # Return list of individual modules
         else:
             # All modules were testbenches - return None to indicate no valid DUT code
             return None
@@ -145,6 +151,12 @@ def _extract_module_blocks(code):
 
 
 def extract_verilog(verilog_code):
+    """Extract Verilog module(s) from code with markdown formatting.
+
+    Returns:
+        list: List of individual module strings (non-testbench modules)
+        None: If no valid modules found
+    """
     # Try multiple markdown formats
     patterns = [
         r"```verilog\s*([\s\S]*?)\s*```",
@@ -156,21 +168,31 @@ def extract_verilog(verilog_code):
     for pattern in patterns:
         matches = re.findall(pattern, verilog_code)
         if matches:
-            # Find the last match that contains "module" keyword
+            # Find the last match that contains valid module(s)
             for match in reversed(matches):
                 extracted = _extract_module_blocks(match)
-                if extracted and "module" in extracted:
+                # Check if we got a non-empty list of modules
+                if isinstance(extracted, list) and extracted:
                     return extracted
-            # Fallback: if no match has module, try last match anyway
+                # Or if we got original code string with "module" in it
+                elif isinstance(extracted, str) and "module" in extracted:
+                    return [extracted]  # Wrap in list for consistency
+            # Fallback: try last match anyway
             extracted = _extract_module_blocks(matches[-1])
-            if extracted:
+            if isinstance(extracted, list) and extracted:
                 return extracted
+            elif isinstance(extracted, str) and extracted:
+                return [extracted]  # Wrap in list
 
     # Fallback: Extract plain text with module keyword (Qwen3 format)
     if "module" in verilog_code and "endmodule" in verilog_code:
         # Remove <think> and <answer> tags if present
         cleaned = re.sub(r"<think>.*?</think>", "", verilog_code, flags=re.DOTALL)
         cleaned = re.sub(r"</?answer>", "", cleaned)
-        return _extract_module_blocks(cleaned.strip())
+        extracted = _extract_module_blocks(cleaned.strip())
+        if isinstance(extracted, list) and extracted:
+            return extracted
+        elif isinstance(extracted, str) and extracted:
+            return [extracted]  # Wrap in list
 
     return None

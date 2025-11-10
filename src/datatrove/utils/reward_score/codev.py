@@ -316,8 +316,8 @@ def compute_score(
             }
 
         # Extract Verilog code from answer block
-        extracted_answer = extract_verilog(solution_str)
-        if not extracted_answer:
+        extracted_modules = extract_verilog(solution_str)  # Now returns list or None
+        if not extracted_modules:
             logger.warning("No Verilog code extracted from answer")
             return {
                 "score": 0.0,
@@ -325,6 +325,12 @@ def compute_score(
                 "reward_think": 1.0,
                 "error": "No Verilog code found"
             }
+
+        # Ensure extracted_modules is a list (backward compatibility)
+        if isinstance(extracted_modules, str):
+            extracted_modules = [extracted_modules]
+
+        logger.info(f"Extracted {len(extracted_modules)} module(s) from response")
 
         # Test against all ground truth variants
         # Some problems may have multiple acceptable solutions
@@ -363,41 +369,60 @@ def compute_score(
                 rewards.append(0.0)
                 continue
 
-            # Parse generated code
-            try:
-                gate_top = v.auto_top(extracted_answer)
-            except Exception as e:
-                logger.error(f"Failed to parse GENERATED Verilog code: {e}")
-                logger.error(f"Generated code (first 300 chars): {extracted_answer[:300] if extracted_answer else None!r}...")
-                logger.error(f"Golden code for comparison (first 300 chars): {golden_code[:300]!r}...")
+            # NEW: Test each extracted module individually
+            variant_passed = False
+            module_results = []
 
-                verification_results.append({
-                    "correct": False,
-                    "parse_error": f"Generated code parsing failed: {str(e)}",
-                    "extracted_answer": extracted_answer if extracted_answer else None,  # Full code
-                    "golden_code": golden_code if golden_code else None,  # Full code
-                })
-                rewards.append(0.0)
-                continue
+            for module_idx, module_code in enumerate(extracted_modules):
+                logger.info(f"Testing module {module_idx + 1}/{len(extracted_modules)} against variant {variant_key}")
 
-            # Verify via Sandbox Fusion
-            result = verify_verilog_via_sandbox(
-                golden_code=golden_code,
-                dut_code=extracted_answer,
-                golden_top=golden_top,
-                gate_top=gate_top,
-                port_info=port_info,
-                sandbox_fusion_url=sandbox_fusion_url,
-                concurrent_semaphore=concurrent_semaphore
-            )
+                # Parse this specific module
+                try:
+                    gate_top = v.auto_top(module_code)
+                except Exception as e:
+                    logger.warning(f"Module {module_idx + 1} parsing failed: {e}")
+                    logger.warning(f"Module code (first 300 chars): {module_code[:300]!r}...")
+                    module_results.append({
+                        "module_idx": module_idx,
+                        "correct": False,
+                        "parse_error": f"Module parsing failed: {str(e)}",
+                        "module_code_preview": module_code[:300] if module_code else None
+                    })
+                    continue
 
-            verification_results.append(result)
-            reward = 1.0 if result.get("correct", False) else 0.0
-            rewards.append(reward)
+                # Verify this module via Sandbox Fusion
+                result = verify_verilog_via_sandbox(
+                    golden_code=golden_code,
+                    dut_code=module_code,  # Test this specific module
+                    golden_top=golden_top,
+                    gate_top=gate_top,
+                    port_info=port_info,
+                    sandbox_fusion_url=sandbox_fusion_url,
+                    concurrent_semaphore=concurrent_semaphore
+                )
 
-            # Early exit if we found a correct match
-            if reward == 1.0:
-                logger.info(f"Found correct match with variant {variant_key}")
+                result["module_idx"] = module_idx
+                module_results.append(result)
+
+                # If any module passes, consider this variant passed
+                if result.get("correct", False):
+                    logger.info(f"✓ Module {module_idx + 1} passed for variant {variant_key}")
+                    variant_passed = True
+                    break  # Early exit: one passing module is enough
+
+            # Store results for this variant
+            verification_results.append({
+                "variant": variant_key,
+                "passed": variant_passed,
+                "num_modules_tested": len(module_results),
+                "module_results": module_results[:3]  # Keep first 3 for debugging
+            })
+
+            rewards.append(1.0 if variant_passed else 0.0)
+
+            # Early exit if we found a passing variant
+            if variant_passed:
+                logger.info(f"✓ Found correct solution with variant {variant_key}")
                 break
 
         # Compute final score (max across all variants)
@@ -409,39 +434,46 @@ def compute_score(
             has_functional_mismatch = False
             error_msgs = []
 
-            for result in verification_results:
-                if not result.get("correct", False):
-                    # Functional mismatch: code ran successfully but answer is wrong
-                    # (has error_rate but no api_error, exception, or parse_error)
-                    if ("error_rate" in result and
-                        "exception" not in result and
-                        "api_error" not in result and
-                        "parse_error" not in result):
-                        has_functional_mismatch = True
-                        break
+            for variant_result in verification_results:
+                # Check module_results within each variant
+                module_results = variant_result.get("module_results", [])
 
-                    # Collect actual error messages
-                    if "api_error" in result:
-                        error_msgs.append(result["api_error"])
-                    elif "exception" in result:
-                        error_msgs.append(result["exception"])
-                    elif "parse_error" in result:
-                        error_msgs.append(result["parse_error"])
-                    elif result.get("api_status") and result["api_status"] != "Success":
-                        api_status = result.get("api_status")
-                        compile_stderr = result.get("compile_stderr", "")
-                        run_stderr = result.get("run_stderr", "")
+                for module_result in module_results:
+                    if not module_result.get("correct", False):
+                        # Functional mismatch: code ran successfully but answer is wrong
+                        # (has error_rate but no api_error, exception, or parse_error)
+                        if ("error_rate" in module_result and
+                            "exception" not in module_result and
+                            "api_error" not in module_result and
+                            "parse_error" not in module_result):
+                            has_functional_mismatch = True
+                            break
 
-                        # Build detailed error message with full stderr (no length limit)
-                        error_parts = [f"API status: {api_status}"]
-                        if compile_stderr:
-                            error_parts.append(f"Compile error: {compile_stderr}")
-                        if run_stderr:
-                            error_parts.append(f"Run error: {run_stderr}")
+                        # Collect actual error messages
+                        if "api_error" in module_result:
+                            error_msgs.append(module_result["api_error"])
+                        elif "exception" in module_result:
+                            error_msgs.append(module_result["exception"])
+                        elif "parse_error" in module_result:
+                            error_msgs.append(module_result["parse_error"])
+                        elif module_result.get("api_status") and module_result["api_status"] != "Success":
+                            api_status = module_result.get("api_status")
+                            compile_stderr = module_result.get("compile_stderr", "")
+                            run_stderr = module_result.get("run_stderr", "")
 
-                        error_msgs.append(" | ".join(error_parts))
+                            # Build detailed error message with full stderr (no length limit)
+                            error_parts = [f"API status: {api_status}"]
+                            if compile_stderr:
+                                error_parts.append(f"Compile error: {compile_stderr}")
+                            if run_stderr:
+                                error_parts.append(f"Run error: {run_stderr}")
 
-            # Raise exception if all variants failed with actual errors (not just wrong answers)
+                            error_msgs.append(" | ".join(error_parts))
+
+                if has_functional_mismatch:
+                    break
+
+            # Raise exception if all modules failed with actual errors (not just wrong answers)
             if not has_functional_mismatch and error_msgs:
                 raise RuntimeError(f"Verilog verification failed: {error_msgs[0]}")
 
@@ -449,6 +481,7 @@ def compute_score(
             "score": final_score,
             "reward_fmt": 1.0,  # Format is correct if we got here
             "reward_think": 1.0,  # Thinking structure is present
+            "num_modules_extracted": len(extracted_modules),
             "num_variants_tested": len(rewards),
             "num_variants_passed": sum(rewards),
             "verification_results": verification_results[:3]  # Include first 3 for debugging
