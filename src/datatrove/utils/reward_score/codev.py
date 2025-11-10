@@ -403,6 +403,37 @@ def compute_score(
         # Compute final score (max across all variants)
         final_score = max(rewards) if rewards else 0.0
 
+        # Check if we should raise an exception for actual errors (not functional mismatch)
+        if final_score == 0.0 and verification_results:
+            # Distinguish between functional mismatch (normal) and actual errors
+            has_functional_mismatch = False
+            error_msgs = []
+
+            for result in verification_results:
+                if not result.get("correct", False):
+                    # Functional mismatch: code ran successfully but answer is wrong
+                    # (has error_rate but no api_error, exception, or parse_error)
+                    if ("error_rate" in result and
+                        "exception" not in result and
+                        "api_error" not in result and
+                        "parse_error" not in result):
+                        has_functional_mismatch = True
+                        break
+
+                    # Collect actual error messages
+                    if "api_error" in result:
+                        error_msgs.append(result["api_error"])
+                    elif "exception" in result:
+                        error_msgs.append(result["exception"])
+                    elif "parse_error" in result:
+                        error_msgs.append(result["parse_error"])
+                    elif result.get("api_status") and result["api_status"] != "Success":
+                        error_msgs.append(f"API status: {result['api_status']}")
+
+            # Raise exception if all variants failed with actual errors (not just wrong answers)
+            if not has_functional_mismatch and error_msgs:
+                raise RuntimeError(f"Verilog verification failed: {error_msgs[0]}")
+
         return {
             "score": final_score,
             "reward_fmt": 1.0,  # Format is correct if we got here
