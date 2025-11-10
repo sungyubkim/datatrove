@@ -35,6 +35,81 @@ from datatrove.pipeline.readers.jsonl import JsonlReader
 from datatrove.pipeline.writers.disk_base import DiskWriter
 
 
+def reconstruct_gptoss_from_vllm_response(choice: dict) -> str:
+    """
+    Reconstruct original GPT OSS format from vLLM's parsed response.
+
+    When vLLM's reasoning parser is enabled, it automatically parses GPT OSS format into:
+    - message.reasoning_content: Analysis channel content (<|channel|>analysis)
+    - message.content: Final channel content (<|channel|>final)
+    - message.tool_calls: Tool invocations (to=functions.X)
+
+    This function reconstructs the original GPT OSS format that scorers expect,
+    which includes all the special tokens (<|start|>, <|channel|>, <|message|>, etc.).
+
+    Args:
+        choice: Response choice dict from vLLM (response["choices"][0])
+
+    Returns:
+        Reconstructed GPT OSS format string, or original content if not parsed
+
+    Example:
+        Input (vLLM parsed):
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "The answer is 42",
+                    "reasoning_content": "Let me think... 6*7=42"
+                }
+            }
+
+        Output (reconstructed):
+            <|start|>assistant<|channel|>analysis<|message|>Let me think... 6*7=42<|end|>
+            <|start|>assistant<|channel|>final<|message|>The answer is 42<|return|>
+    """
+    message = choice.get("message", {})
+    reasoning_content = message.get("reasoning_content")
+    content = message.get("content")
+    tool_calls = message.get("tool_calls")
+
+    # If no reasoning_content or tool_calls, vLLM parser wasn't active
+    # Return original content as-is
+    if reasoning_content is None and tool_calls is None:
+        return content or ""
+
+    # Reconstruct GPT OSS format from parsed components
+    parts = []
+
+    # 1. Analysis channel (thinking/reasoning)
+    if reasoning_content:
+        parts.append(
+            f"<|start|>assistant<|channel|>analysis<|message|>"
+            f"{reasoning_content}<|end|>"
+        )
+
+    # 2. Tool calls
+    if tool_calls:
+        for tool_call in tool_calls:
+            function = tool_call.get("function", {})
+            tool_name = function.get("name", "unknown")
+            tool_args = function.get("arguments", "{}")
+            parts.append(
+                f"<|start|>assistant to=functions.{tool_name}"
+                f"<|channel|>commentary json<|message|>"
+                f"{tool_args}<|call|>"
+            )
+
+    # 3. Final channel (only if no tool calls)
+    # Tool calls typically don't include final channel
+    if content and not tool_calls:
+        parts.append(
+            f"<|start|>assistant<|channel|>final<|message|>"
+            f"{content}<|return|>"
+        )
+
+    return "\n".join(parts)
+
+
 @dataclass
 class InferenceSuccess:
     """
@@ -538,7 +613,8 @@ class InferenceRunner(PipelineStep):
 
                     # Parse response based on endpoint type
                     if self.config.use_chat:
-                        text = choice["message"]["content"]
+                        # Reconstruct GPT OSS format if vLLM reasoning parser was used
+                        text = reconstruct_gptoss_from_vllm_response(choice)
                     else:
                         text = choice["text"]
 
