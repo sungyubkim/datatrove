@@ -102,7 +102,7 @@ def verify_one_sample_wrapper(args):
 
 
 def _extract_module_blocks(code):
-    """Extract only module...endmodule blocks from code, removing explanatory text."""
+    """Extract only module...endmodule blocks from code, excluding testbenches."""
     # Remove comments first
     note_pattern = r"(//[^\n]*|/\*[\s\S]*?\*/)"
     code = re.sub(note_pattern, "", code)
@@ -113,8 +113,28 @@ def _extract_module_blocks(code):
     modules = re.findall(module_pattern, code, re.DOTALL)
 
     if modules:
-        # Return all modules joined with double newline
-        return "\n\n".join(modules)
+        # Filter out testbench modules
+        filtered_modules = []
+        for module_block in modules:
+            # Extract module name
+            name_match = re.search(r"module\s+([a-zA-Z_][a-zA-Z0-9_$]*)", module_block)
+            if name_match:
+                module_name = name_match.group(1).lower()
+
+                # Check if it's a testbench (case-insensitive)
+                if not (
+                    module_name.startswith("tb_") or
+                    module_name.endswith("_tb") or
+                    "testbench" in module_name or
+                    "test_bench" in module_name
+                ):
+                    filtered_modules.append(module_block)
+            else:
+                # If we can't extract name, keep it (might be valid but complex syntax)
+                filtered_modules.append(module_block)
+
+        if filtered_modules:
+            return "\n\n".join(filtered_modules)
 
     # If no match, return original (might have valid module but complex syntax)
     return code
