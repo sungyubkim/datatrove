@@ -386,6 +386,15 @@ class InstructionStandardizer(PipelineStep):
             output_parts.append(sections["examples"])
             output_parts.append("\n\n")
 
+        # Implementation Requirements section (sandbox optimization)
+        from datatrove.pipeline.formatters.instruction_parsers import get_parser_for_domain
+        parser = get_parser_for_domain(domain)
+        implementation_hints = parser.generate_implementation_hints()
+        if implementation_hints:
+            output_parts.append("## Implementation Requirements\n")
+            output_parts.append(implementation_hints)
+            output_parts.append("\n\n")
+
         # Domain-specific section
         if sections["domain_specific"]:
             if domain == "python":
@@ -497,9 +506,11 @@ class InstructionStandardizer(PipelineStep):
                         user_message["content"] = standardized_content
 
                         # Add format version metadata for tracking and migration
+                        # v1.0: Basic 6-section format
+                        # v1.1: Added Implementation Requirements section (7-section)
                         if not doc.metadata:
                             doc.metadata = {}
-                        doc.metadata["_instruction_format_version"] = "1.0"
+                        doc.metadata["_instruction_format_version"] = "1.1"
 
                         self.stat_update("standardized")
 

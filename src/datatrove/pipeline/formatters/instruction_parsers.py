@@ -34,6 +34,14 @@ class InstructionParser(ABC):
         """
         pass
 
+    def generate_implementation_hints(self) -> str:
+        """Generate domain-specific implementation hints for sandbox grading.
+
+        Returns:
+            Implementation requirements text optimized for sandbox_fusion grading
+        """
+        return ""  # Default: no hints
+
 
 class VerilogInstructionParser(InstructionParser):
     """Parser for Verilog HDL instructions (codev-r1-verl, hardware design format).
@@ -259,6 +267,25 @@ class VerilogInstructionParser(InstructionParser):
 
         return constraints
 
+    def generate_implementation_hints(self) -> str:
+        """Generate Verilog-specific implementation hints."""
+        return """**Code Format:**
+- Wrap your Verilog code in markdown code blocks with ```verilog
+- Module name should match the problem specification
+- Include all required input/output ports
+
+**Module Structure:**
+- Define module with exact port names and widths from Signal Interface table
+- Implement behavioral logic matching the problem description
+- Use proper always blocks for sequential logic (e.g., `always @(posedge clk)`)
+- Use assign statements for combinational logic
+
+**Common Pitfalls:**
+- Ensure port directions match (input vs output)
+- Check signal widths match specifications
+- Verify reset polarity (active-high vs active-low)
+- Test edge-triggered vs level-sensitive behavior"""
+
 
 class PythonCodeInstructionParser(InstructionParser):
     """Parser for Python code instructions (kodcode, LeetCode, HumanEval format).
@@ -336,6 +363,25 @@ class PythonCodeInstructionParser(InstructionParser):
             sections["examples"] = "\n\n".join(examples_text)
 
         return sections
+
+    def generate_implementation_hints(self) -> str:
+        """Generate Python-specific implementation hints."""
+        return """**Code Format:**
+- Wrap your Python code in markdown code blocks with ```python
+- Match the exact function signature if provided
+- Return the result (don't print unless explicitly required)
+
+**Implementation Guidelines:**
+- Use appropriate data structures (list, dict, set, deque, heap)
+- Import standard library modules as needed (collections, heapq, bisect, etc.)
+- Follow time/space complexity constraints if specified
+- Handle edge cases (empty input, single element, duplicates)
+
+**Common Pitfalls:**
+- Don't modify function signature unless problem allows it
+- Avoid unnecessary print statements (return instead)
+- Check if problem requires in-place modification vs new data structure
+- Verify return type matches expected output format"""
 
 
 class CompetitiveProgrammingParser(InstructionParser):
@@ -439,6 +485,25 @@ class CompetitiveProgrammingParser(InstructionParser):
             sections["problem"] = text[:first_header_start].strip()
 
         return sections
+
+    def generate_implementation_hints(self) -> str:
+        """Generate competitive programming-specific implementation hints."""
+        return """**Code Format:**
+- Wrap your code in markdown code blocks (```python, ```cpp, ```java, etc.)
+- Read from stdin and write to stdout (unless using function signature)
+- Handle multiple test cases if specified
+
+**Input/Output Guidelines:**
+- Parse input exactly as described in Input Format section
+- Output must match Output Format precisely (spacing, newlines, formatting)
+- Use appropriate data types (int, long, double) based on constraints
+- Handle large inputs efficiently (avoid TLE - Time Limit Exceeded)
+
+**Common Pitfalls:**
+- Don't add extra whitespace or debug output
+- Check integer overflow for large constraints (use long/int64)
+- Optimize algorithm based on time complexity constraints
+- Test with boundary cases (min/max values, edge cases from constraints)"""
 
 
 def get_parser_for_domain(domain: str) -> InstructionParser:
