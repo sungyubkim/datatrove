@@ -471,8 +471,17 @@ class InstructionStandardizer(PipelineStep):
                         yield doc
                         continue
 
-                    # Get the user message (first item in prompt)
-                    user_message = prompt[0]
+                    # Get the first user message (skip system messages)
+                    user_message = None
+                    for msg in prompt:
+                        if isinstance(msg, dict) and msg.get('role') == 'user':
+                            user_message = msg
+                            break
+
+                    # Fallback to first message if no user message found (backward compatibility)
+                    if not user_message:
+                        user_message = prompt[0]
+
                     if not isinstance(user_message, dict) or "content" not in user_message:
                         logger.warning(f"Document {doc.id} has invalid user message format, skipping")
                         self.stat_update("skipped_invalid_message")

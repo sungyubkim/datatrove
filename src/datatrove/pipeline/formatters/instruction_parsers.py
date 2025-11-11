@@ -257,8 +257,9 @@ class VerilogInstructionParser(InstructionParser):
     def generate_implementation_hints(self) -> str:
         """Generate Verilog-specific implementation hints."""
         return """**Code Format:**
-- Wrap your Verilog code in markdown code blocks with ```verilog
-- Module name should match the problem specification
+- Wrap your Verilog code in markdown code blocks: ```verilog ... ```
+- Use the exact module name specified in the problem
+- Example: ```verilog\n module specified_name(...) ... endmodule\n ```
 - Include all required input/output ports
 
 **Module Structure:**

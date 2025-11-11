@@ -87,6 +87,9 @@ def compute_hash(text: str) -> str:
 def extract_problem_text(row_dict: dict) -> str:
     """Extract problem text from VERL format row.
 
+    Extracts the first 'user' role message content, skipping any 'system' messages.
+    Falls back to first message if no 'user' message found (backward compatibility).
+
     Args:
         row_dict: Row dictionary with VERL schema
 
@@ -100,6 +103,13 @@ def extract_problem_text(row_dict: dict) -> str:
     if not isinstance(prompt, list) or len(prompt) == 0:
         return ""
 
+    # Try to find first 'user' role message (skip 'system' messages)
+    for message in prompt:
+        if isinstance(message, dict) and 'role' in message and message['role'] == 'user':
+            if 'content' in message:
+                return message['content']
+
+    # Fallback: use first message if no 'user' message found (backward compatibility)
     first_message = prompt[0]
     if isinstance(first_message, dict) and 'content' in first_message:
         return first_message['content']
@@ -137,6 +147,7 @@ def process_dataset(
     input_file: str,
     output_file: str,
     preset_name: str = "python-code",
+    split: str = "train",
     batch_size: int = 1000,
     sample_rate: int = 1000,
 ) -> dict:
@@ -146,6 +157,7 @@ def process_dataset(
         input_file: Path to input parquet file or Hub dataset ID
         output_file: Path to output parquet file
         preset_name: Standardization preset name
+        split: Dataset split to process (default: "train")
         batch_size: Batch size for processing
         sample_rate: Collect sample every N documents
 
@@ -168,11 +180,11 @@ def process_dataset(
         is_local = is_local_file(input_file)
 
         if is_local:
-            print(f"  Loading local parquet file: {input_file}")
-            dataset = load_dataset("parquet", data_files=input_file, split="train", streaming=True)
+            print(f"  Loading local parquet file: {input_file} (split: {split})")
+            dataset = load_dataset("parquet", data_files=input_file, split=split, streaming=True)
         else:
-            print(f"  Loading from HuggingFace Hub: {input_file}")
-            dataset = load_dataset(input_file, split="train", streaming=True)
+            print(f"  Loading from HuggingFace Hub: {input_file} (split: {split})")
+            dataset = load_dataset(input_file, split=split, streaming=True)
 
         print(f"✓ Dataset loaded in streaming mode")
     except Exception as e:
@@ -549,6 +561,13 @@ Examples:
     )
 
     parser.add_argument(
+        '--split',
+        type=str,
+        default='train',
+        help='Dataset split to process: train, validation, test, etc. (default: train)'
+    )
+
+    parser.add_argument(
         '--batch-size',
         type=int,
         default=1000,
@@ -589,6 +608,7 @@ Examples:
         input_file=args.input,
         output_file=args.output,
         preset_name=args.preset,
+        split=args.split,
         batch_size=args.batch_size,
         sample_rate=args.sample_rate,
     )

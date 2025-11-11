@@ -75,15 +75,33 @@ def verl_to_document_adapter(
     Returns:
         Dictionary with "text", "id", and "metadata" keys for Document creation
     """
-    import base64
     import json
+    import pickle
 
-    # Convert bytes ground_truth to base64 for checkpoint JSON serialization
-    # Note: New JSON format datasets (e.g., codev) already have string ground_truth, no conversion needed
+    # Normalize ground_truth to JSON string format for idempotency
+    # This ensures output format matches input format (JSON string)
     reward_model = data["reward_model"].copy()
-    if "ground_truth" in reward_model and isinstance(reward_model["ground_truth"], bytes):
-        # Legacy format: pickle bytes → base64 string for JSON compatibility
-        reward_model["ground_truth"] = base64.b64encode(reward_model["ground_truth"]).decode('ascii')
+    if "ground_truth" in reward_model:
+        ground_truth = reward_model["ground_truth"]
+
+        if isinstance(ground_truth, bytes):
+            # Legacy pickle format → unpickle and convert to JSON string
+            try:
+                gt_data = pickle.loads(ground_truth)
+                # Convert sets to lists for JSON compatibility
+                if isinstance(gt_data, dict) and "answer" in gt_data:
+                    answer = gt_data["answer"]
+                    for key in ["input_port_width", "output_port_width",
+                               "clock_port_polarity", "reset_port_polarity_sync"]:
+                        if key in answer and isinstance(answer[key], set):
+                            # Convert set of tuples to list of lists
+                            answer[key] = [list(item) if isinstance(item, tuple) else item
+                                          for item in answer[key]]
+                reward_model["ground_truth"] = json.dumps(gt_data)
+            except Exception as e:
+                # If unpickling fails, keep as-is and log warning
+                print(f"Warning: Failed to unpickle ground_truth: {e}")
+        # else: Already a string (JSON or plain text), keep as-is
 
     return {
         "text": json.dumps(data["prompt"]),  # Serialize prompt for text field
@@ -234,29 +252,14 @@ def postprocess_and_score(runner: InferenceRunner, document: Document) -> Docume
     Returns:
         Updated document with unified_responses and scoring statistics
     """
-    import base64
-
     inference_results = document.metadata.get("inference_results", [])
     # Reconstruct objects from checkpoint dictionaries
     inference_results = [reconstruct_inference_result(r) for r in inference_results]
     ground_truth = document.metadata["reward_model"].get("ground_truth", "")
     data_source = document.metadata["data_source"]
 
-    # Handle different ground truth formats:
-    # - Legacy pickle format: base64 string → decode to bytes
-    # - New JSON format: plain string → keep as-is (e.g., codev JSON)
-    # - Math/QA datasets: plain string → keep as-is
-    if isinstance(ground_truth, str):
-        # Only attempt base64 decode if string doesn't look like JSON
-        # JSON structures start with { or [, so skip base64 decode for those
-        stripped = ground_truth.strip()
-        if not (stripped.startswith('{') or stripped.startswith('[')):
-            try:
-                ground_truth = base64.b64decode(ground_truth)  # Try decoding base64
-            except Exception:
-                pass  # Not base64, use as string (JSON or plain text)
-
     # Handle different ground truth formats based on dataset type
+    # Ground truth is now always a JSON string (converted by input adapter)
     # SearchR1 datasets expect dict format: {"target": [answers]}
     if data_source.startswith("searchR1_") and isinstance(ground_truth, str):
         ground_truth = {"target": [ground_truth]}
@@ -450,8 +453,6 @@ def document_to_verl_adapter(document: Document) -> dict:
     Returns:
         Dictionary for parquet row with VERL standard fields only
     """
-    import base64
-
     # Check if unified_responses already exists (from postprocess_and_score)
     unified_responses = document.metadata.get("unified_responses", None)
 
@@ -533,22 +534,16 @@ def document_to_verl_adapter(document: Document) -> dict:
         }
     )
 
-    # Handle output ground_truth format:
-    # - Legacy format: base64 string → decode back to bytes for parquet
-    # - New JSON format: keep as string (no base64 encoding)
+    # Keep ground_truth in JSON string format (idempotent)
+    # Input adapter already normalized it to JSON string format
     reward_model = document.metadata["reward_model"].copy()
-    if "ground_truth" in reward_model and isinstance(reward_model["ground_truth"], str):
-        try:
-            reward_model["ground_truth"] = base64.b64decode(reward_model["ground_truth"])
-        except Exception:
-            pass  # Not base64 (e.g., JSON string), keep as-is
 
     return {
         # VERL standard fields (5 required fields only)
         "data_source": document.metadata["data_source"],
         "prompt": document.metadata["original_prompt"],
         "ability": document.metadata["ability"],
-        "reward_model": reward_model,  # Use decoded version with original bytes format
+        "reward_model": reward_model,  # JSON string format (same as input)
         "extra_info": extra_info,  # All results stored here
     }
 
