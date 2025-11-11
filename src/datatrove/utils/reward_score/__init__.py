@@ -11,17 +11,20 @@ class NormalizedScore(TypedDict, total=False):
         score: The primary score value (required, always present)
         error: Error message if scoring failed, empty string "" on success (required, always present)
                Empty string instead of None for Parquet compatibility
-        reward_think: Optional reward for thinking/reasoning content
-        reward_fmt: Optional reward for format correctness
-        reward_correct: Optional reward for correctness (e.g., tool calls)
-        reward_length: Optional reward for response length
+        reward_think: Reward for thinking/reasoning content. 0.0 if not applicable/not computed.
+        reward_fmt: Reward for format correctness. 0.0 if not applicable/not computed.
+        reward_correct: Reward for correctness (e.g., tool calls). 0.0 if not applicable/not computed.
+        reward_length: Reward for response length. 0.0 if not applicable/not computed.
+
+    Note: All reward_* fields use 0.0 instead of None for Parquet compatibility.
+          PyArrow requires consistent types - using 0.0 ensures the fields are always float type.
     """
     score: float
     error: str
-    reward_think: float | None
-    reward_fmt: float | None
-    reward_correct: float | None
-    reward_length: float | None
+    reward_think: float
+    reward_fmt: float
+    reward_correct: float
+    reward_length: float
 
 
 def normalize_score(raw_result, error: str | None = None) -> NormalizedScore:
@@ -50,16 +53,18 @@ def normalize_score(raw_result, error: str | None = None) -> NormalizedScore:
         error = error or f"Invalid scorer result type: {type(raw_result)}"
 
     # Ensure all required fields are present with proper types
-    # For Parquet compatibility: Use empty string "" instead of None for string fields
-    # This prevents PyArrow schema inference issues where None -> null type conflicts with string type
+    # For Parquet compatibility:
+    # - Use empty string "" instead of None for string fields (error)
+    # - Use 0.0 instead of None for float fields (reward_*)
+    # This prevents PyArrow schema inference issues where None -> null type conflicts with target type
     error_value = error or base.get("error")
     normalized: NormalizedScore = {
         "score": float(base.get("score", 0.0)),
         "error": error_value if error_value is not None else "",  # "" instead of None
-        "reward_think": base.get("reward_think"),
-        "reward_fmt": base.get("reward_fmt"),
-        "reward_correct": base.get("reward_correct"),
-        "reward_length": base.get("reward_length"),
+        "reward_think": float(base.get("reward_think") or 0.0),  # 0.0 instead of None
+        "reward_fmt": float(base.get("reward_fmt") or 0.0),      # 0.0 instead of None
+        "reward_correct": float(base.get("reward_correct") or 0.0),  # 0.0 instead of None
+        "reward_length": float(base.get("reward_length") or 0.0),    # 0.0 instead of None
     }
 
     return normalized

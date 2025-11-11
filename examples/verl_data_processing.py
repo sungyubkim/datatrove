@@ -171,13 +171,13 @@ def normalize_usage(usage: dict | None) -> dict:
 # {
 #     "score": float,
 #     "error": str,  # Empty string "" on success, error message on failure
-#     "reward_think": float | None,
-#     "reward_fmt": float | None,
-#     "reward_correct": float | None,
-#     "reward_length": float | None
+#     "reward_think": float,  # 0.0 if not applicable/not computed
+#     "reward_fmt": float,    # 0.0 if not applicable/not computed
+#     "reward_correct": float,  # 0.0 if not applicable/not computed
+#     "reward_length": float    # 0.0 if not applicable/not computed
 # }
 # All fields are guaranteed to be present, preventing Parquet schema mismatch errors.
-# NOTE: error is a string (empty string "" for success) not None, for Parquet compatibility.
+# NOTE: error uses empty string "" (not None), reward_* use 0.0 (not None), for Parquet compatibility.
 
 
 def reconstruct_inference_result(
@@ -272,10 +272,10 @@ def postprocess_and_score(runner: InferenceRunner, document: Document) -> Docume
                 scores.append({
                     "score": 0.0,
                     "error": f"Scoring error: {str(e)}",
-                    "reward_think": None,
-                    "reward_fmt": None,
-                    "reward_correct": None,
-                    "reward_length": None,
+                    "reward_think": 0.0,
+                    "reward_fmt": 0.0,
+                    "reward_correct": 0.0,
+                    "reward_length": 0.0,
                 })
         else:
             # Failed inference gets zero score with normalized schema
@@ -283,10 +283,10 @@ def postprocess_and_score(runner: InferenceRunner, document: Document) -> Docume
             scores.append({
                 "score": 0.0,
                 "error": f"Inference error: {error_msg}",
-                "reward_think": None,
-                "reward_fmt": None,
-                "reward_correct": None,
-                "reward_length": None,
+                "reward_think": 0.0,
+                "reward_fmt": 0.0,
+                "reward_correct": 0.0,
+                "reward_length": 0.0,
             })
 
     # Compute aggregate statistics
