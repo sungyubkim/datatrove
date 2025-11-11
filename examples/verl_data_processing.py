@@ -292,6 +292,7 @@ def postprocess_and_score(runner: InferenceRunner, document: Document) -> Docume
     # Compute aggregate statistics
     if scores:
         valid_scores = [s["score"] for s in scores]
+        # Store scores in metadata (will be merged with inference_results in output adapter)
         document.metadata["response_scores"] = scores
         document.metadata["avg_score"] = sum(valid_scores) / len(valid_scores)
         document.metadata["max_score"] = max(valid_scores)
@@ -364,11 +365,24 @@ def document_to_verl_adapter(document: Document) -> dict:
 
     Output follows VERL standard (5 required fields) with all generation results
     and metrics stored in the extra_info field:
-    - generated_responses: List of responses with unified schema (Parquet compatible)
-        Each response has: text, finish_reason, usage, error, is_success
-        Success: text/finish_reason/usage filled, error=None, is_success=True
-        Failure: text/usage=None, finish_reason="error", error filled, is_success=False
-    - response_scores: Scores for each response
+    - responses: List of unified response objects (Parquet compatible)
+        Each response merges inference result + score into a single object:
+        {
+            # Response fields
+            "text": str | None,
+            "finish_reason": str,
+            "usage": dict,
+            "error": str | None,
+            "is_success": bool,
+
+            # Score fields
+            "score": float,
+            "score_error": str,
+            "reward_think": float,
+            "reward_fmt": float,
+            "reward_correct": float,
+            "reward_length": float
+        }
     - avg_score, max_score, min_score: Aggregate statistics
     - success_rate, num_correct, num_responses, num_failed: Success metrics
 
@@ -380,33 +394,58 @@ def document_to_verl_adapter(document: Document) -> dict:
     """
     import base64
 
-    # Extract inference results
+    # Extract inference results and scores
     inference_results = document.metadata.get("inference_results", [])
     # Reconstruct objects from checkpoint dictionaries
     inference_results = [reconstruct_inference_result(r) for r in inference_results]
+    response_scores = document.metadata.get("response_scores", [])
 
-    # Format responses for output with unified schema (for Parquet compatibility)
+    # Validate that inference results and scores are aligned
+    if len(inference_results) != len(response_scores):
+        raise ValueError(
+            f"Length mismatch: inference_results ({len(inference_results)}) "
+            f"!= response_scores ({len(response_scores)}). "
+            f"Lists must be synchronized."
+        )
+
+    # Create unified response objects (merge inference result + score)
     # All responses have the same fields regardless of success/failure
-    generated_responses = []
-    for result in inference_results:
+    unified_responses = []
+    for result, score in zip(inference_results, response_scores):
         if isinstance(result, InferenceSuccess):
-            generated_responses.append(
+            unified_responses.append(
                 {
+                    # Response fields
                     "text": result.text,
                     "finish_reason": result.finish_reason,
                     "usage": normalize_usage(result.usage),
                     "error": None,
                     "is_success": True,
+                    # Score fields
+                    "score": score.get("score", 0.0),
+                    "score_error": score.get("error", ""),
+                    "reward_think": score.get("reward_think", 0.0),
+                    "reward_fmt": score.get("reward_fmt", 0.0),
+                    "reward_correct": score.get("reward_correct", 0.0),
+                    "reward_length": score.get("reward_length", 0.0),
                 }
             )
         else:
-            generated_responses.append(
+            unified_responses.append(
                 {
+                    # Response fields
                     "text": None,
                     "finish_reason": "error",
                     "usage": normalize_usage(None),
                     "error": result.error if hasattr(result, "error") else "unknown",
                     "is_success": False,
+                    # Score fields (0.0 for failed inference)
+                    "score": score.get("score", 0.0),
+                    "score_error": score.get("error", ""),
+                    "reward_think": score.get("reward_think", 0.0),
+                    "reward_fmt": score.get("reward_fmt", 0.0),
+                    "reward_correct": score.get("reward_correct", 0.0),
+                    "reward_length": score.get("reward_length", 0.0),
                 }
             )
 
@@ -414,9 +453,8 @@ def document_to_verl_adapter(document: Document) -> dict:
     extra_info = document.metadata.get("extra_info", {}).copy()
     extra_info.update(
         {
-            # Generated responses and scores
-            "generated_responses": generated_responses,
-            "response_scores": document.metadata.get("response_scores", []),
+            # Unified responses (single list with both inference + score data)
+            "responses": unified_responses,
             # Aggregate statistics
             "avg_score": document.metadata.get("avg_score", 0.0),
             "max_score": document.metadata.get("max_score", 0.0),
