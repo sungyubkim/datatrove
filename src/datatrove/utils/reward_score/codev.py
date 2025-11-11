@@ -277,12 +277,29 @@ def compute_score(
     try:
         # Parse ground truth from JSON or pickle (backward compatibility)
         if isinstance(ground_truth, bytes):
-            # Legacy format: pickled bytes
-            gts = pickle.loads(ground_truth)
+            # Check if bytes are actually pickle data (magic bytes: \x80\x03 or \x80\x04)
+            # Pickle protocol 3 and 4 start with these magic bytes
+            if len(ground_truth) >= 2 and ground_truth[:2] in [b'\x80\x03', b'\x80\x04']:
+                # Legacy format: pickled bytes
+                gts = pickle.loads(ground_truth)
+            else:
+                # Not pickle data - likely corrupted bytes from base64 decode of JSON
+                # Try to decode as UTF-8 and parse as JSON
+                logger.warning("Bytes do not have pickle magic bytes, attempting UTF-8 decode + JSON parse")
+                try:
+                    ground_truth = ground_truth.decode('utf-8')
+                    gts = json.loads(ground_truth)
+                except (UnicodeDecodeError, json.JSONDecodeError) as e:
+                    raise ValueError(f"Ground truth bytes are not valid pickle or JSON: {e}")
         elif isinstance(ground_truth, str):
             # New format: JSON string
             gts = json.loads(ground_truth)
-            # Convert lists back to sets for port info (JSON doesn't support sets or tuples)
+        else:
+            raise ValueError(f"Unexpected ground_truth type: {type(ground_truth)}")
+
+        # Convert lists back to sets for port info (JSON doesn't support sets or tuples)
+        # This applies to both JSON string and bytes-decoded-to-JSON paths
+        if isinstance(gts, dict):
             for variant in gts.values():
                 if isinstance(variant, dict):
                     for key in ['input_port_width', 'output_port_width',
@@ -294,8 +311,6 @@ def compute_score(
                                 tuple(item) if isinstance(item, list) else item
                                 for item in variant[key]
                             )
-        else:
-            raise ValueError(f"Unexpected ground_truth type: {type(ground_truth)}")
 
         # Extract assistant response from chat template wrapper (format-aware)
         # This handles Llama, Qwen, GPT OSS, and raw formats

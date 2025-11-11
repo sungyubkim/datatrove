@@ -247,10 +247,14 @@ def postprocess_and_score(runner: InferenceRunner, document: Document) -> Docume
     # - New JSON format: plain string → keep as-is (e.g., codev JSON)
     # - Math/QA datasets: plain string → keep as-is
     if isinstance(ground_truth, str):
-        try:
-            ground_truth = base64.b64decode(ground_truth)  # Try decoding base64
-        except Exception:
-            pass  # Not base64, use as string (JSON or plain text)
+        # Only attempt base64 decode if string doesn't look like JSON
+        # JSON structures start with { or [, so skip base64 decode for those
+        stripped = ground_truth.strip()
+        if not (stripped.startswith('{') or stripped.startswith('[')):
+            try:
+                ground_truth = base64.b64decode(ground_truth)  # Try decoding base64
+            except Exception:
+                pass  # Not base64, use as string (JSON or plain text)
 
     # Handle different ground truth formats based on dataset type
     # SearchR1 datasets expect dict format: {"target": [answers]}
