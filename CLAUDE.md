@@ -503,6 +503,17 @@ ${logging_dir}/
 - Add `_requires_dependencies = ["package_name"]` to custom blocks
 - Checked via `check_required_dependencies()` from `utils/_import_utils.py`
 
+**Parquet Schema Consistency**: When writing to Parquet format, all fields must have consistent types across rows to prevent schema mismatch errors:
+- **Critical Rule**: Use empty string `""` instead of `None` for string fields in fallback/error cases
+- **Why**: PyArrow/Parquet cannot handle `None` (null type) mixed with `str` in same column
+- **Examples**:
+  - ✅ Success case: `{"text": "response", "inference_error": "", "score_error": ""}`
+  - ✅ Failure case: `{"text": "", "inference_error": "timeout", "score_error": "scoring failed"}`
+  - ❌ Wrong (causes schema mismatch): `{"text": None, "inference_error": None}`
+- **Applies to**: All nullable string fields including text, error messages, metadata values, etc.
+- **Related fields**: `text`, `inference_error`, `score_error`, and any custom string fields
+- See `examples/verl_data_processing.py` for implementation example with unified response objects
+
 ## Common Patterns in Examples
 
 All examples are in `examples/`:

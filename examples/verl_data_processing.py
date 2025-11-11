@@ -220,15 +220,19 @@ def postprocess_and_score(runner: InferenceRunner, document: Document) -> Docume
     2. Scores each response against ground truth using VERL's compute_score
        - Automatically selects appropriate scorer based on data_source
        - Supports math (GSM8K, MATH), code execution, geometry, and QA datasets
-    3. Computes aggregate statistics (avg, max, success rate, etc.)
-    4. Adds results to document metadata
+    3. Creates unified response objects merging inference results + scores
+       - Each response contains: text, finish_reason, usage, inference_error, is_success,
+         score, score_error, reward_think, reward_fmt, reward_correct, reward_length
+       - Uses empty strings ("") instead of None for schema consistency (Parquet compatible)
+    4. Computes aggregate statistics (avg, max, success rate, etc.)
+    5. Stores unified_responses in document.metadata for checkpoints and output
 
     Args:
         runner: InferenceRunner instance
         document: Document with inference results
 
     Returns:
-        Updated document with scoring results (or None to skip saving)
+        Updated document with unified_responses and scoring statistics
     """
     import base64
 
@@ -289,23 +293,70 @@ def postprocess_and_score(runner: InferenceRunner, document: Document) -> Docume
                 "reward_length": 0.0,
             })
 
+    # Create unified response objects (merge inference results + scores)
+    # This unified structure is stored in checkpoints and used for output
+    unified_responses = []
+    for result, score in zip(inference_results, scores):
+        if isinstance(result, InferenceSuccess):
+            unified_responses.append(
+                {
+                    # Response fields
+                    "text": result.text,
+                    "finish_reason": result.finish_reason,
+                    "usage": normalize_usage(result.usage),
+                    "inference_error": "",  # Empty string for success (schema consistent)
+                    "is_success": True,
+                    # Score fields
+                    "score": score.get("score", 0.0),
+                    "score_error": score.get("error", ""),
+                    "reward_think": score.get("reward_think", 0.0),
+                    "reward_fmt": score.get("reward_fmt", 0.0),
+                    "reward_correct": score.get("reward_correct", 0.0),
+                    "reward_length": score.get("reward_length", 0.0),
+                }
+            )
+        else:
+            # Failed inference
+            error_msg = result.error if hasattr(result, "error") else "unknown"
+            unified_responses.append(
+                {
+                    # Response fields (use empty strings for None to maintain schema)
+                    "text": "",  # Empty string instead of None (schema consistent)
+                    "finish_reason": "error",
+                    "usage": normalize_usage(None),
+                    "inference_error": error_msg,  # Inference error message
+                    "is_success": False,
+                    # Score fields (0.0 for failed inference)
+                    "score": score.get("score", 0.0),
+                    "score_error": score.get("error", ""),
+                    "reward_think": score.get("reward_think", 0.0),
+                    "reward_fmt": score.get("reward_fmt", 0.0),
+                    "reward_correct": score.get("reward_correct", 0.0),
+                    "reward_length": score.get("reward_length", 0.0),
+                }
+            )
+
     # Compute aggregate statistics
-    if scores:
-        valid_scores = [s["score"] for s in scores]
-        # Store scores in metadata (will be merged with inference_results in output adapter)
-        document.metadata["response_scores"] = scores
+    if unified_responses:
+        valid_scores = [r["score"] for r in unified_responses]
+        # Store unified responses (used by both checkpoints and output adapter)
+        document.metadata["unified_responses"] = unified_responses
         document.metadata["avg_score"] = sum(valid_scores) / len(valid_scores)
         document.metadata["max_score"] = max(valid_scores)
         document.metadata["min_score"] = min(valid_scores)
-        document.metadata["num_correct"] = sum(int(s["score"] > 0) for s in scores)
-        document.metadata["success_rate"] = document.metadata["num_correct"] / len(
-            scores
+        document.metadata["num_correct"] = sum(
+            int(r["score"] > 0) for r in unified_responses
         )
-        document.metadata["num_responses"] = len(scores)
-        document.metadata["num_failed"] = sum(1 for s in scores if "error" in s)
+        document.metadata["success_rate"] = document.metadata["num_correct"] / len(
+            unified_responses
+        )
+        document.metadata["num_responses"] = len(unified_responses)
+        document.metadata["num_failed"] = sum(
+            1 for r in unified_responses if r["score_error"]
+        )
     else:
         # No responses generated
-        document.metadata["response_scores"] = []
+        document.metadata["unified_responses"] = []
         document.metadata["avg_score"] = 0.0
         document.metadata["max_score"] = 0.0
         document.metadata["min_score"] = 0.0
@@ -369,15 +420,15 @@ def document_to_verl_adapter(document: Document) -> dict:
         Each response merges inference result + score into a single object:
         {
             # Response fields
-            "text": str | None,
+            "text": str,               # "" for failures (not None - schema consistent)
             "finish_reason": str,
             "usage": dict,
-            "error": str | None,
+            "inference_error": str,    # "" for success (not None - schema consistent)
             "is_success": bool,
 
             # Score fields
             "score": float,
-            "score_error": str,
+            "score_error": str,        # "" for success
             "reward_think": float,
             "reward_fmt": float,
             "reward_correct": float,
@@ -394,60 +445,69 @@ def document_to_verl_adapter(document: Document) -> dict:
     """
     import base64
 
-    # Extract inference results and scores
-    inference_results = document.metadata.get("inference_results", [])
-    # Reconstruct objects from checkpoint dictionaries
-    inference_results = [reconstruct_inference_result(r) for r in inference_results]
-    response_scores = document.metadata.get("response_scores", [])
+    # Check if unified_responses already exists (from postprocess_and_score)
+    unified_responses = document.metadata.get("unified_responses", None)
 
-    # Validate that inference results and scores are aligned
-    if len(inference_results) != len(response_scores):
-        raise ValueError(
-            f"Length mismatch: inference_results ({len(inference_results)}) "
-            f"!= response_scores ({len(response_scores)}). "
-            f"Lists must be synchronized."
-        )
+    # If not present, create from separate lists (backward compatibility with old checkpoints)
+    if unified_responses is None:
+        # Extract inference results and scores
+        inference_results = document.metadata.get("inference_results", [])
+        # Reconstruct objects from checkpoint dictionaries
+        inference_results = [
+            reconstruct_inference_result(r) for r in inference_results
+        ]
+        response_scores = document.metadata.get("response_scores", [])
 
-    # Create unified response objects (merge inference result + score)
-    # All responses have the same fields regardless of success/failure
-    unified_responses = []
-    for result, score in zip(inference_results, response_scores):
-        if isinstance(result, InferenceSuccess):
-            unified_responses.append(
-                {
-                    # Response fields
-                    "text": result.text,
-                    "finish_reason": result.finish_reason,
-                    "usage": normalize_usage(result.usage),
-                    "error": None,
-                    "is_success": True,
-                    # Score fields
-                    "score": score.get("score", 0.0),
-                    "score_error": score.get("error", ""),
-                    "reward_think": score.get("reward_think", 0.0),
-                    "reward_fmt": score.get("reward_fmt", 0.0),
-                    "reward_correct": score.get("reward_correct", 0.0),
-                    "reward_length": score.get("reward_length", 0.0),
-                }
+        # Validate that inference results and scores are aligned
+        if len(inference_results) != len(response_scores):
+            raise ValueError(
+                f"Length mismatch: inference_results ({len(inference_results)}) "
+                f"!= response_scores ({len(response_scores)}). "
+                f"Lists must be synchronized."
             )
-        else:
-            unified_responses.append(
-                {
-                    # Response fields
-                    "text": None,
-                    "finish_reason": "error",
-                    "usage": normalize_usage(None),
-                    "error": result.error if hasattr(result, "error") else "unknown",
-                    "is_success": False,
-                    # Score fields (0.0 for failed inference)
-                    "score": score.get("score", 0.0),
-                    "score_error": score.get("error", ""),
-                    "reward_think": score.get("reward_think", 0.0),
-                    "reward_fmt": score.get("reward_fmt", 0.0),
-                    "reward_correct": score.get("reward_correct", 0.0),
-                    "reward_length": score.get("reward_length", 0.0),
-                }
-            )
+
+        # Create unified response objects (merge inference result + score)
+        # All responses have the same fields regardless of success/failure
+        unified_responses = []
+        for result, score in zip(inference_results, response_scores):
+            if isinstance(result, InferenceSuccess):
+                unified_responses.append(
+                    {
+                        # Response fields
+                        "text": result.text,
+                        "finish_reason": result.finish_reason,
+                        "usage": normalize_usage(result.usage),
+                        "inference_error": "",  # Empty string for success (schema consistent)
+                        "is_success": True,
+                        # Score fields
+                        "score": score.get("score", 0.0),
+                        "score_error": score.get("error", ""),
+                        "reward_think": score.get("reward_think", 0.0),
+                        "reward_fmt": score.get("reward_fmt", 0.0),
+                        "reward_correct": score.get("reward_correct", 0.0),
+                        "reward_length": score.get("reward_length", 0.0),
+                    }
+                )
+            else:
+                unified_responses.append(
+                    {
+                        # Response fields (use empty strings for schema consistency)
+                        "text": "",  # Empty string instead of None (schema consistent)
+                        "finish_reason": "error",
+                        "usage": normalize_usage(None),
+                        "inference_error": result.error
+                        if hasattr(result, "error")
+                        else "unknown",
+                        "is_success": False,
+                        # Score fields (0.0 for failed inference)
+                        "score": score.get("score", 0.0),
+                        "score_error": score.get("error", ""),
+                        "reward_think": score.get("reward_think", 0.0),
+                        "reward_fmt": score.get("reward_fmt", 0.0),
+                        "reward_correct": score.get("reward_correct", 0.0),
+                        "reward_length": score.get("reward_length", 0.0),
+                    }
+                )
 
     # Copy existing extra_info and add generation results
     extra_info = document.metadata.get("extra_info", {}).copy()
