@@ -1,3 +1,70 @@
+from typing import TypedDict
+
+
+class NormalizedScore(TypedDict, total=False):
+    """Standard schema for all scorer outputs.
+
+    All scorers must return a dict conforming to this schema to ensure
+    consistent Parquet writes and avoid schema mismatch errors.
+
+    Attributes:
+        score: The primary score value (required, always present)
+        error: Error message if scoring failed, empty string "" on success (required, always present)
+               Empty string instead of None for Parquet compatibility
+        reward_think: Optional reward for thinking/reasoning content
+        reward_fmt: Optional reward for format correctness
+        reward_correct: Optional reward for correctness (e.g., tool calls)
+        reward_length: Optional reward for response length
+    """
+    score: float
+    error: str
+    reward_think: float | None
+    reward_fmt: float | None
+    reward_correct: float | None
+    reward_length: float | None
+
+
+def normalize_score(raw_result, error: str | None = None) -> NormalizedScore:
+    """Normalize any scorer output to standard schema.
+
+    Ensures all required fields are present with consistent types to prevent
+    Parquet schema mismatch errors when writing documents.
+
+    Args:
+        raw_result: Raw scorer output (dict, tuple, or scalar)
+        error: Optional error message to include in normalized result
+
+    Returns:
+        NormalizedScore with all fields properly typed and present
+    """
+    # Handle different input types
+    if isinstance(raw_result, dict):
+        base = raw_result.copy()
+    elif isinstance(raw_result, tuple):
+        # Sandbox fusion returns (score, metadata)
+        base = {"score": float(raw_result[0])}
+    elif isinstance(raw_result, (int, float, bool)):
+        base = {"score": float(raw_result)}
+    else:
+        base = {"score": 0.0}
+        error = error or f"Invalid scorer result type: {type(raw_result)}"
+
+    # Ensure all required fields are present with proper types
+    # For Parquet compatibility: Use empty string "" instead of None for string fields
+    # This prevents PyArrow schema inference issues where None -> null type conflicts with string type
+    error_value = error or base.get("error")
+    normalized: NormalizedScore = {
+        "score": float(base.get("score", 0.0)),
+        "error": error_value if error_value is not None else "",  # "" instead of None
+        "reward_think": base.get("reward_think"),
+        "reward_fmt": base.get("reward_fmt"),
+        "reward_correct": base.get("reward_correct"),
+        "reward_length": base.get("reward_length"),
+    }
+
+    return normalized
+
+
 def compute_score(
     data_source,
     solution_str,
@@ -15,10 +82,13 @@ def compute_score(
         solution_str (str): The solution string to be evaluated.
         ground_truth (str): The ground truth answer for comparison.
         extra_info (dict, optional): Additional information that might be needed for scoring. Defaults to None.
+        sandbox_fusion_url (str, optional): URL for sandbox fusion server (required for code/verilog execution).
+        concurrent_semaphore: Semaphore for limiting concurrent requests.
+        memory_limit_mb (int, optional): Memory limit for code execution in MB.
 
     Returns:
-        float: The computed score as a floating point number. If the result is a dictionary,
-               it returns the dictionary instead.
+        NormalizedScore: A dictionary with standardized fields (score, error, reward_*).
+                        All fields are guaranteed to be present with consistent types.
 
     Raises:
         NotImplementedError: If the reward function is not implemented for the given data source.
@@ -245,23 +315,51 @@ def compute_score(
             f"Reward function is not implemented for {data_source=}"
         )
 
-    if isinstance(res, dict):
-        return res
-    elif isinstance(res, int | float | bool):
-        return {
-            "score": float(res),
-            "reward_fmt": 1.0,
-            "reward_think": 1.0,
-        }
-    else:
-        return {
-            "score": float(res[0]),
-            "reward_fmt": 1.0,
-            "reward_think": 1.0,
-        }
+    # Normalize the scorer result to ensure consistent schema
+    return normalize_score(res)
 
 
-__all__ = ["compute_score"]
+def compute_score_safe(
+    data_source,
+    solution_str,
+    ground_truth,
+    extra_info=None,
+    sandbox_fusion_url=None,
+    concurrent_semaphore=None,
+    memory_limit_mb=None,
+    **kwargs,
+) -> NormalizedScore:
+    """Safe wrapper around compute_score that catches exceptions.
+
+    This function ensures that even if scoring fails, a normalized result
+    with an error message is returned instead of raising an exception.
+
+    Args:
+        Same as compute_score()
+
+    Returns:
+        NormalizedScore: Always returns a normalized score dict, even on error
+    """
+    try:
+        return compute_score(
+            data_source=data_source,
+            solution_str=solution_str,
+            ground_truth=ground_truth,
+            extra_info=extra_info,
+            sandbox_fusion_url=sandbox_fusion_url,
+            concurrent_semaphore=concurrent_semaphore,
+            memory_limit_mb=memory_limit_mb,
+            **kwargs,
+        )
+    except Exception as e:
+        # Return normalized error result
+        return normalize_score(
+            raw_result={"score": 0.0},
+            error=f"{type(e).__name__}: {str(e)}"
+        )
+
+
+__all__ = ["compute_score", "compute_score_safe", "normalize_score", "NormalizedScore"]
 
 
 # Backward compatibility alias

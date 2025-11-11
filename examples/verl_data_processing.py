@@ -166,58 +166,18 @@ def normalize_usage(usage: dict | None) -> dict:
     }
 
 
-def normalize_score(
-    score_result: dict | None, is_success: bool = True, error_msg: str = None
-) -> dict:
-    """
-    Normalize score results to a consistent schema for Parquet compatibility.
-
-    compute_score now always returns a dict with score, reward_think, and reward_fmt fields.
-    This function adds the error field for consistent Parquet schema.
-
-    When scoring fails, this function preserves partial results (reward_think, reward_fmt)
-    if they were computed before the error occurred.
-
-    Args:
-        score_result: Score dict from compute_score (with score, reward_think, reward_fmt)
-                     Can be None if scoring failed catastrophically before any results
-        is_success: Whether inference succeeded
-        error_msg: Error message if inference failed
-
-    Returns:
-        Normalized dict with consistent schema:
-        {
-            "score": float,               # Always present (0.0 on error)
-            "error": str | None,          # None for success, error message for failure
-            "reward_think": float | None, # Preserved from score_result if available
-            "reward_fmt": float | None    # Preserved from score_result if available
-        }
-    """
-    if is_success:
-        return {
-            "score": score_result.get("score", 0.0),
-            "error": None,
-            "reward_think": score_result.get("reward_think", None),
-            "reward_fmt": score_result.get("reward_fmt", None),
-        }
-    else:
-        # Failure case - preserve partial results if available
-        if score_result is not None and isinstance(score_result, dict):
-            # Partial results exist - preserve reward_think and reward_fmt
-            return {
-                "score": 0.0,
-                "error": error_msg if error_msg else "unknown",
-                "reward_think": score_result.get("reward_think", None),
-                "reward_fmt": score_result.get("reward_fmt", None),
-            }
-        else:
-            # Catastrophic failure - no partial results available
-            return {
-                "score": 0.0,
-                "error": error_msg if error_msg else "unknown",
-                "reward_think": None,
-                "reward_fmt": None,
-            }
+# Note: The normalize_score() function has been removed as of the latest update.
+# compute_score() now automatically returns normalized scores with consistent schema:
+# {
+#     "score": float,
+#     "error": str,  # Empty string "" on success, error message on failure
+#     "reward_think": float | None,
+#     "reward_fmt": float | None,
+#     "reward_correct": float | None,
+#     "reward_length": float | None
+# }
+# All fields are guaranteed to be present, preventing Parquet schema mismatch errors.
+# NOTE: error is a string (empty string "" for success) not None, for Parquet compatibility.
 
 
 def reconstruct_inference_result(
@@ -294,42 +254,40 @@ def postprocess_and_score(runner: InferenceRunner, document: Document) -> Docume
         ground_truth = {"target": [ground_truth]}
 
     # Score each response
+    # Note: compute_score() now returns normalized scores with consistent schema automatically
     scores = []
     for result in inference_results:
         if isinstance(result, InferenceSuccess):
             try:
+                # compute_score() returns NormalizedScore with all fields present
                 score_dict = compute_score(
                     data_source,
                     result.text,
                     ground_truth,
                     sandbox_fusion_url=SANDBOX_FUSION_URL,
                 )
-
-                # Check if compute_score returned an error (caught internally by scorer)
-                # Some scorers catch exceptions and return them as {"error": "..."} instead of raising
-                if "error" in score_dict and score_dict["error"] is not None:
-                    # Preserve partial results (reward_think, reward_fmt) by passing score_dict
-                    normalized_score = normalize_score(
-                        score_dict,
-                        is_success=False,
-                        error_msg=score_dict["error"]
-                    )
-                else:
-                    # Success case - normalize score to consistent schema for Parquet compatibility
-                    normalized_score = normalize_score(score_dict, is_success=True)
+                scores.append(score_dict)
             except Exception as e:
-                # Handle scoring errors (e.g., invalid format, API errors)
-                normalized_score = normalize_score(
-                    None, is_success=False, error_msg=f"Scoring error: {str(e)}"
-                )
-            scores.append(normalized_score)
+                # Handle scoring errors - return normalized error score
+                scores.append({
+                    "score": 0.0,
+                    "error": f"Scoring error: {str(e)}",
+                    "reward_think": None,
+                    "reward_fmt": None,
+                    "reward_correct": None,
+                    "reward_length": None,
+                })
         else:
             # Failed inference gets zero score with normalized schema
             error_msg = result.error if hasattr(result, "error") else "unknown"
-            normalized_score = normalize_score(
-                None, is_success=False, error_msg=error_msg
-            )
-            scores.append(normalized_score)
+            scores.append({
+                "score": 0.0,
+                "error": f"Inference error: {error_msg}",
+                "reward_think": None,
+                "reward_fmt": None,
+                "reward_correct": None,
+                "reward_length": None,
+            })
 
     # Compute aggregate statistics
     if scores:
