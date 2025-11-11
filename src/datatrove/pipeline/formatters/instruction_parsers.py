@@ -181,12 +181,16 @@ class VerilogInstructionParser(InstructionParser):
     def _extract_constraints_from_description(self, text: str) -> List[str]:
         """Extract implicit constraints from problem description.
 
+        Focuses on extracting semantic/behavioral constraints that are NOT
+        already present in the Signal Interface table. Avoids redundancy.
+
         Looks for:
-        - Memory/capacity specifications
-        - Timing requirements
+        - Memory/capacity specifications (beyond port widths)
+        - Timing requirements (delays, clock periods, frequencies)
         - Behavioral keywords (reset types, synchronous/asynchronous, edge-triggered)
-        - Bit width specifications
-        - Frequency/clock specifications
+
+        Note: Bit width specifications are intentionally NOT extracted as they
+        are already present in the Signal Interface table.
 
         Args:
             text: The problem description text
@@ -196,7 +200,7 @@ class VerilogInstructionParser(InstructionParser):
         """
         constraints = []
 
-        # Memory/capacity constraints
+        # Memory/capacity constraints (beyond simple bit widths)
         capacity_patterns = [
             r'capacity\s+of\s+(\d+)\s*(\w+)',
             r'(\d+)[-\s](\w+)\s+(?:memory|storage|capacity)',
@@ -243,36 +247,27 @@ class VerilogInstructionParser(InstructionParser):
                 if constraint_text not in constraints:
                     constraints.append(constraint_text)
 
-        # Bit width specifications (not already in table)
-        bit_width_matches = re.finditer(r'(\d+)[-\s]bit(?:\s+(\w+))?', text, re.IGNORECASE)
-        for match in bit_width_matches:
-            width = match.group(1)
-            component = match.group(2) if match.group(2) else "value"
-            constraint_text = f"{component.capitalize()} width: {width} bits"
-            if constraint_text not in constraints:
-                constraints.append(constraint_text)
+        # Note: Bit width extraction removed to prevent duplication with Signal Interface table
+        # The Signal Interface table already contains all port width information
 
         return constraints
 
     def generate_implementation_hints(self) -> str:
-        """Generate Verilog-specific implementation hints."""
+        """Generate Verilog-specific implementation hints.
+
+        Focuses on output format and high-level guidance rather than prescriptive
+        implementation details. Encourages multiple valid approaches.
+        """
         return """**Code Format:**
 - Wrap your Verilog code in markdown code blocks: ```verilog ... ```
-- Use the exact module name specified in the problem
-- Example: ```verilog\n module specified_name(...) ... endmodule\n ```
-- Include all required input/output ports
+- Use the exact module name and port interface specified in the Signal Interface table
+- Example: ```verilog\n module specified_name(...); ... endmodule\n ```
 
-**Module Structure:**
-- Define module with exact port names and widths from Signal Interface table
-- Implement behavioral logic matching the problem description
-- Use proper always blocks for sequential logic (e.g., `always @(posedge clk)`)
-- Use assign statements for combinational logic
-
-**Common Pitfalls:**
-- Ensure port directions match (input vs output)
-- Check signal widths match specifications
-- Verify reset polarity (active-high vs active-low)
-- Test edge-triggered vs level-sensitive behavior"""
+**Design Approach:**
+- Analyze the problem requirements and choose appropriate Verilog constructs
+- Ensure your design meets all specified behavioral requirements
+- Multiple valid implementations may exist - focus on correctness and clarity
+- Consider the timing and synchronization requirements described in the problem"""
 
 
 class PythonCodeInstructionParser(InstructionParser):
