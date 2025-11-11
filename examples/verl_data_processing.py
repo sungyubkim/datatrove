@@ -341,6 +341,9 @@ def postprocess_and_score(runner: InferenceRunner, document: Document) -> Docume
         valid_scores = [r["score"] for r in unified_responses]
         # Store unified responses (used by both checkpoints and output adapter)
         document.metadata["unified_responses"] = unified_responses
+        # Remove inference_results to prevent checkpoint duplication
+        # (unified_responses contains all the same data + scores)
+        document.metadata.pop("inference_results", None)
         document.metadata["avg_score"] = sum(valid_scores) / len(valid_scores)
         document.metadata["max_score"] = max(valid_scores)
         document.metadata["min_score"] = min(valid_scores)
