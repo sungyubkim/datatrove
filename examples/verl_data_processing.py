@@ -16,6 +16,8 @@ VERL format reference: https://verl.readthedocs.io/en/latest/preparation/prepare
 
 from typing import Any, AsyncGenerator
 
+import pyarrow as pa
+
 from datatrove.data import Document
 from datatrove.executor.local import LocalPipelineExecutor
 from datatrove.pipeline.inference.run_inference import (
@@ -48,6 +50,56 @@ MAX_TOKENS = 2048  # Maximum tokens per response
 # Reward scoring settings
 SANDBOX_FUSION_URL = None  # Set to your sandbox URL for code execution scoring
 # Example: SANDBOX_FUSION_URL = "http://your-sandbox-server.com:5000"
+
+
+# ==============================================================================
+# PyArrow Schema Definition for VERL Format
+# ==============================================================================
+# Explicit schema prevents PyArrow from dropping fields during automatic schema inference.
+# This is critical for preserving error fields (inference_error, score_error) which may
+# be empty strings in some rows and actual error messages in others.
+VERL_SCHEMA = pa.schema([
+    ('data_source', pa.string()),
+    ('prompt', pa.list_(pa.struct([
+        ('role', pa.string()),
+        ('content', pa.string())
+    ]))),
+    ('ability', pa.string()),
+    ('reward_model', pa.struct([
+        ('style', pa.string()),
+        ('ground_truth', pa.string())
+    ])),
+    ('extra_info', pa.struct([
+        # Unified responses list with all inference + scoring fields
+        ('responses', pa.list_(pa.struct([
+            # Inference result fields
+            ('text', pa.string()),
+            ('finish_reason', pa.string()),
+            ('usage', pa.struct([
+                ('prompt_tokens', pa.int64()),
+                ('completion_tokens', pa.int64()),
+                ('total_tokens', pa.int64())
+            ])),
+            ('inference_error', pa.string()),  # CRITICAL: Must be explicitly defined
+            ('is_success', pa.bool_()),
+            # Scoring result fields
+            ('score', pa.float64()),
+            ('score_error', pa.string()),  # CRITICAL: Must be explicitly defined
+            ('reward_think', pa.float64()),
+            ('reward_fmt', pa.float64()),
+            ('reward_correct', pa.float64()),
+            ('reward_length', pa.float64())
+        ]))),
+        # Aggregate statistics
+        ('avg_score', pa.float64()),
+        ('max_score', pa.float64()),
+        ('min_score', pa.float64()),
+        ('success_rate', pa.float64()),
+        ('num_correct', pa.int64()),
+        ('num_responses', pa.int64()),
+        ('num_failed', pa.int64())
+    ]))
+])
 
 
 # ==============================================================================
@@ -592,6 +644,7 @@ pipeline = [
             adapter=document_to_verl_adapter,
             output_filename="${rank}_chunk_${chunk_index}.parquet",
             compression="snappy",
+            schema=VERL_SCHEMA,  # Explicit schema preserves error fields
         ),
         checkpoints_local_dir=CHECKPOINTS_PATH,  # Enable checkpointing
         records_per_chunk=500,  # Save checkpoint every 500 documents
