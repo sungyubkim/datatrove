@@ -229,15 +229,20 @@ def reconstruct_inference_result(
         )
 
 
-def postprocess_and_score(runner: InferenceRunner, document: Document) -> Document:
+async def postprocess_and_score(runner: InferenceRunner, document: Document) -> Document:
     """
     Post-process document after inference: score responses and compute statistics.
 
+    This async function enables parallel scoring of all responses within a document for
+    maximum throughput, especially beneficial for I/O-bound scoring (sandbox requests).
+
     This function:
     1. Retrieves all generated responses from inference_results
-    2. Scores each response against ground truth using VERL's compute_score
+    2. Scores ALL responses in PARALLEL against ground truth using VERL's compute_score
        - Automatically selects appropriate scorer based on data_source
        - Supports math (GSM8K, MATH), code execution, geometry, and QA datasets
+       - Uses asyncio.gather() for concurrent execution
+       - Uses runner.scoring_semaphore to prevent overwhelming external services
     3. Creates unified response objects merging inference results + scores
        - Each response contains: text, finish_reason, usage, inference_error, is_success,
          score, score_error, reward_think, reward_fmt, reward_correct, reward_length
@@ -246,12 +251,14 @@ def postprocess_and_score(runner: InferenceRunner, document: Document) -> Docume
     5. Stores unified_responses in document.metadata for checkpoints and output
 
     Args:
-        runner: InferenceRunner instance
+        runner: InferenceRunner instance (provides scoring_semaphore)
         document: Document with inference results
 
     Returns:
         Updated document with unified_responses and scoring statistics
     """
+    import asyncio
+
     inference_results = document.metadata.get("inference_results", [])
     # Reconstruct objects from checkpoint dictionaries
     inference_results = [reconstruct_inference_result(r) for r in inference_results]
@@ -264,41 +271,50 @@ def postprocess_and_score(runner: InferenceRunner, document: Document) -> Docume
     if data_source.startswith("searchR1_") and isinstance(ground_truth, str):
         ground_truth = {"target": [ground_truth]}
 
-    # Score each response
+    # Score all responses in parallel using asyncio.gather()
     # Note: compute_score() now returns normalized scores with consistent schema automatically
-    scores = []
-    for result in inference_results:
+    async def score_single_response(result):
+        """Score a single response with semaphore rate limiting."""
         if isinstance(result, InferenceSuccess):
             try:
-                # compute_score() returns NormalizedScore with all fields present
-                score_dict = compute_score(
-                    data_source,
-                    result.text,
-                    ground_truth,
-                    sandbox_fusion_url=SANDBOX_FUSION_URL,
-                )
-                scores.append(score_dict)
+                # Use semaphore to limit concurrent scoring requests
+                async with runner.scoring_semaphore:
+                    # Run synchronous compute_score in thread pool to avoid blocking event loop
+                    score_dict = await asyncio.to_thread(
+                        compute_score,
+                        data_source,
+                        result.text,
+                        ground_truth,
+                        sandbox_fusion_url=SANDBOX_FUSION_URL,
+                    )
+                return score_dict
             except Exception as e:
                 # Handle scoring errors - return normalized error score
-                scores.append({
+                return {
                     "score": 0.0,
                     "error": f"Scoring error: {str(e)}",
                     "reward_think": 0.0,
                     "reward_fmt": 0.0,
                     "reward_correct": 0.0,
                     "reward_length": 0.0,
-                })
+                }
         else:
             # Failed inference gets zero score with normalized schema
             error_msg = result.error if hasattr(result, "error") else "unknown"
-            scores.append({
+            return {
                 "score": 0.0,
                 "error": f"Inference error: {error_msg}",
                 "reward_think": 0.0,
                 "reward_fmt": 0.0,
                 "reward_correct": 0.0,
                 "reward_length": 0.0,
-            })
+            }
+
+    # Score all responses concurrently
+    scores = await asyncio.gather(*[
+        score_single_response(result)
+        for result in inference_results
+    ])
 
     # Create unified response objects (merge inference results + scores)
     # This unified structure is stored in checkpoints and used for output
@@ -579,8 +595,9 @@ pipeline = [
         ),
         checkpoints_local_dir=CHECKPOINTS_PATH,  # Enable checkpointing
         records_per_chunk=500,  # Save checkpoint every 500 documents
-        postprocess_fn=postprocess_and_score,  # Score responses
+        postprocess_fn=postprocess_and_score,  # Async scoring - all responses scored in parallel
         skip_bad_requests=True,  # Skip documents that cause BadRequestError
+        max_concurrent_scoring=50,  # Limit concurrent scoring requests to sandbox (adjust based on sandbox capacity)
     ),
     # Step 3 (Optional): Collect statistics
     # Uncomment to enable statistics collection

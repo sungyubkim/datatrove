@@ -470,6 +470,7 @@ class InferenceRunner(PipelineStep):
         records_per_chunk: int = 6000,
         postprocess_fn: Callable[[InferenceRunner, Document], Document | None] | None = None,
         skip_bad_requests: bool = False,
+        max_concurrent_scoring: int = 50,
     ):
         """
         Initialize the inference runner.
@@ -484,7 +485,8 @@ class InferenceRunner(PipelineStep):
             checkpoints_local_dir: Local directory to store checkpoints. We save individual files of records_per_chunk documents each locally as a "copy" of the output_writer documents. If a task fails, we will take the locally saved files and re-upload their documents.
             records_per_chunk: Ignored if checkpoints_local_dir is not provided. Default: 6000.
             skip_bad_requests: If True, will skip documents that cause BadRequestError from the server. Default: False.
-            postprocess_fn: Function that post-processes the document after inference. Takes the InferenceRunner instance and document as arguments. If it returns None, the document is not saved to output_writer.
+            postprocess_fn: Function that post-processes the document after inference. Takes the InferenceRunner instance and document as arguments. If it returns None, the document is not saved to output_writer. Can be either sync or async function.
+            max_concurrent_scoring: Maximum number of concurrent scoring requests across all documents. Used when postprocess_fn is async to limit concurrent scoring operations. Default: 50.
         """
         super().__init__()
 
@@ -492,6 +494,7 @@ class InferenceRunner(PipelineStep):
         self.config = config
         self.postprocess_fn = postprocess_fn
         self.skip_bad_requests = skip_bad_requests
+        self.max_concurrent_scoring = max_concurrent_scoring
 
         self.output_writer = output_writer
 
@@ -500,6 +503,9 @@ class InferenceRunner(PipelineStep):
         self._server: InferenceServer | None = None
         self.metrics = MetricsKeeper(window=60 * 5)
         self.queue_sizes = QueueSizesKeeper()
+
+        # Scoring semaphore will be initialized in run() where event loop exists
+        self._scoring_semaphore: asyncio.Semaphore | None = None
 
     async def metrics_reporter(self, interval: int = 600):
         """
@@ -514,6 +520,21 @@ class InferenceRunner(PipelineStep):
             logger.info("\n" + str(self.queue_sizes))
             logger.info(str(self.stats))
             await asyncio.sleep(interval)
+
+    @property
+    def scoring_semaphore(self) -> asyncio.Semaphore:
+        """
+        Access scoring semaphore for limiting concurrent scoring operations.
+
+        Returns:
+            The scoring semaphore instance
+
+        Raises:
+            RuntimeError: If called before run_async initializes the semaphore
+        """
+        if self._scoring_semaphore is None:
+            raise RuntimeError("scoring_semaphore accessed before run_async initialization")
+        return self._scoring_semaphore
 
     @property
     def server(self) -> InferenceServer:
@@ -727,6 +748,7 @@ class InferenceRunner(PipelineStep):
             world_size: Total number of processes in distributed setup
         """
         semaphore = asyncio.Semaphore(self.config.max_concurrent_requests)
+        self._scoring_semaphore = asyncio.Semaphore(self.max_concurrent_scoring)
         server_task = asyncio.create_task(self.server.host_server(rank=rank))
         await self.server.wait_until_ready()
         logger.info(f"Inference server up on port {self.server.port}")
@@ -795,7 +817,12 @@ class InferenceRunner(PipelineStep):
 
                 # Post-process the document if a function is provided. We still want the actual document for checkpointing purposes.
                 if self.postprocess_fn:
-                    postprocess_result = self.postprocess_fn(self, doc)
+                    # Check if postprocess_fn is async and await if needed
+                    if asyncio.iscoroutinefunction(self.postprocess_fn):
+                        postprocess_result = await self.postprocess_fn(self, doc)
+                    else:
+                        postprocess_result = self.postprocess_fn(self, doc)
+
                     if postprocess_result is None:
                         doc.metadata["postprocess_remove"] = True
                     else:
