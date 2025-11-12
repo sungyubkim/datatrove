@@ -118,7 +118,7 @@ def call_sandbox_api(
 
     for attempt in range(MAX_RETRIES):
         try:
-            logger.info(
+            logger.debug(
                 f"{log_prefix}Attempt {attempt + 1}/{MAX_RETRIES}: Calling sandbox API at {sandbox_fusion_url}"
             )  # <-- Use internal log_prefix
             response = requests.post(
@@ -134,13 +134,13 @@ def call_sandbox_api(
                     f"{log_prefix}API Request Error: Gateway Timeout (504) on attempt "
                     f"{attempt + 1}/{MAX_RETRIES}"
                 )  # <-- Use internal log_prefix
-                logger.warning(last_error)
+                logger.debug(last_error)
                 if attempt < MAX_RETRIES - 1:  # Don't sleep after the last attempt
                     # Calculate increasing delay (e.g., 1s, 2s, 4s, ...) or (1s, 2s, 3s, ...)
                     # Simple linear increase: delay = INITIAL_RETRY_DELAY * (attempt + 1)
                     # Exponential backoff: delay = INITIAL_RETRY_DELAY * (2 ** attempt)
                     delay = INITIAL_RETRY_DELAY * (attempt + 1)  # Using linear increase for simplicity
-                    logger.info(f"{log_prefix}Retrying after {delay} seconds...")  # <-- Use internal log_prefix
+                    logger.debug(f"{log_prefix}Retrying after {delay} seconds...")  # <-- Use internal log_prefix
                     time.sleep(delay)
                 continue  # Go to the next retry attempt
 
@@ -148,7 +148,7 @@ def call_sandbox_api(
             response.raise_for_status()
 
             # If successful (status code 2xx)
-            logger.info(
+            logger.debug(
                 f"{log_prefix}Sandbox API call successful on attempt {attempt + 1}"
             )  # <-- Use internal log_prefix
             return response.json(), None
@@ -165,7 +165,11 @@ def call_sandbox_api(
             break  # Exit retry loop on other unexpected errors
 
     # If loop finishes without returning success, return the last recorded error
-    logger.error(f"{log_prefix}Sandbox API call failed. Last error: {last_error}")  # <-- Use internal log_prefix
+    # Only log ERROR if not a timeout (timeouts are expected)
+    if "Gateway Timeout" not in last_error:
+        logger.error(f"{log_prefix}Sandbox API call failed. Last error: {last_error}")  # <-- Use internal log_prefix
+    else:
+        logger.debug(f"{log_prefix}Sandbox API call timed out after {MAX_RETRIES} attempts")
     # Return the error message without the prefix, as the caller doesn't need the internal ID
     # Ensure API call failure returns error message, leading to -1 in check_correctness
     return None, last_error.replace(log_prefix, "API Call Failed: ") if last_error else "API Call Failed after retries"
@@ -196,7 +200,7 @@ def _process_single_case(
     """
     api_response = None
     error_msg = None
-    logger.info(f"Processing test case {case_index + 1}.")
+    logger.debug(f"Processing test case {case_index + 1}.")
 
     current_generation_code = generation
 
@@ -400,11 +404,11 @@ if __name__ == '__main__':
     if error_msg:
         metadata["status"] = "api_error"
         result_status = -1  # API request itself failed (includes timeout after retries)
-        logger.error(f"Case {case_index}: API error occurred: {error_msg}")
+        logger.debug(f"Case {case_index}: API error occurred: {error_msg}")
         # Log code and input only on error for brevity
         generation_to_log = generation[:200] + "..." if len(generation) > 200 else generation
-        logger.error(f"Case {case_index}: code: {generation_to_log}")
-        logger.error(f"Case {case_index}: input: {stdin}")
+        logger.debug(f"Case {case_index}: code: {generation_to_log}")
+        logger.debug(f"Case {case_index}: input: {stdin}")
     elif api_response:
         # --- Add debug logging ---
         logger.debug(f"Case {case_index}: API Response: {api_response}")
@@ -531,7 +535,7 @@ def check_correctness(
         metadata_list: A list containing metadata dictionaries for each test case,
                        ordered corresponding to the inputs.
     """
-    logger.info("Starting correctness check for generation.")
+    logger.debug("Starting correctness check for generation.")
 
     if not in_outs or "inputs" not in in_outs or "outputs" not in in_outs:
         logger.warning("Invalid in_outs format provided.")
@@ -638,5 +642,5 @@ def check_correctness(
                 else:  # If future completed but result is overridden
                     metadata_list[i]["status"] = "compile_error_skipped"
 
-    logger.info(f"Correctness check finished. Results: {results}")
+    logger.debug(f"Correctness check finished. Results: {results}")
     return results, metadata_list

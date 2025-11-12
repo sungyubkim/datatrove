@@ -191,7 +191,9 @@ def verify_verilog_via_sandbox(
         )
 
         if error_msg:
-            logger.error(f"Sandbox API error: {error_msg}")
+            # Only log ERROR for non-timeout issues (timeouts are expected)
+            if "timeout" not in error_msg.lower():
+                logger.error(f"Sandbox API error: {error_msg}")
             return {"correct": False, "api_error": error_msg}
 
         if not api_response:
@@ -201,7 +203,7 @@ def verify_verilog_via_sandbox(
         # Check response status
         api_status = api_response.get("status")
         if api_status != "Success":
-            logger.warning(f"API returned status: {api_status}")
+            logger.debug(f"API returned status: {api_status}")
             compile_result = api_response.get("compile_result", {})
             run_result = api_response.get("run_result", {})
 
@@ -225,7 +227,7 @@ def verify_verilog_via_sandbox(
 
         # Check if all tests passed
         if "All tests passed." in stdout:
-            logger.info("Verification passed: All tests passed")
+            logger.debug("Verification passed: All tests passed")
             return {
                 "correct": True,
                 "error_rate": error_rate,
@@ -233,7 +235,7 @@ def verify_verilog_via_sandbox(
                 "stderr": stderr if stderr else None
             }
         else:
-            logger.info(f"Functional mismatch: {error_rate*100:.1f}% of test cases failed (code compiled and ran successfully)")
+            logger.debug(f"Functional mismatch: {error_rate*100:.1f}% of test cases failed (code compiled and ran successfully)")
             return {
                 "correct": False,
                 "error_rate": error_rate,
@@ -275,6 +277,8 @@ def compute_score(
         dict: Score dictionary with 'score', 'reward_fmt', 'reward_think' keys
     """
     try:
+        # Progress tracking: Start
+        logger.info(f"Starting CodeV scoring (format: {format_type})")
         # Parse ground truth from JSON or pickle (backward compatibility)
         if isinstance(ground_truth, bytes):
             # Check if bytes are actually pickle data (magic bytes: \x80\x03 or \x80\x04)
@@ -322,30 +326,34 @@ def compute_score(
 
         # Check format (must have proper tags/channels)
         if not check_format(solution_str, format_type=format_type):
-            logger.warning("Invalid format: missing or incorrect tags/channels")
+            logger.debug("Invalid format: missing or incorrect tags/channels")
             return {
                 "score": 0.0,
                 "reward_fmt": 0.0,
                 "reward_think": 0.0,
-                "error": "Invalid format"
+                "error": "Invalid format",
+                "error_category": "format_error",
+                "error_summary": "Response missing required <think>/<answer> tags or <|channel|> blocks"
             }
 
         # Extract Verilog code from answer block
         extracted_modules = extract_verilog(solution_str)  # Now returns list or None
         if not extracted_modules:
-            logger.warning("No Verilog code extracted from answer")
+            logger.debug("No Verilog code extracted from answer")
             return {
                 "score": 0.0,
                 "reward_fmt": 1.0,  # Format is correct, but no code
                 "reward_think": 1.0,
-                "error": "No Verilog code found"
+                "error": "No Verilog code found",
+                "error_category": "extraction_error",
+                "error_summary": "No Verilog code blocks found in answer section"
             }
 
         # Ensure extracted_modules is a list (backward compatibility)
         if isinstance(extracted_modules, str):
             extracted_modules = [extracted_modules]
 
-        logger.info(f"Extracted {len(extracted_modules)} module(s) from response")
+        logger.debug(f"Extracted {len(extracted_modules)} module(s) from response")
 
         # Test against all ground truth variants
         # Some problems may have multiple acceptable solutions
@@ -353,7 +361,7 @@ def compute_score(
         verification_results = []
 
         for variant_key, gt_variant in gts.items():
-            logger.info(f"Testing against ground truth variant: {variant_key}")
+            logger.debug(f"Testing against ground truth variant: {variant_key}")
 
             # Extract golden code and port information
             golden_code = gt_variant.get('code')
@@ -389,14 +397,14 @@ def compute_score(
             module_results = []
 
             for module_idx, module_code in enumerate(extracted_modules):
-                logger.info(f"Testing module {module_idx + 1}/{len(extracted_modules)} against variant {variant_key}")
+                logger.debug(f"Testing module {module_idx + 1}/{len(extracted_modules)} against variant {variant_key}")
 
                 # Parse this specific module
                 try:
                     gate_top = v.auto_top(module_code)
                 except Exception as e:
-                    logger.warning(f"Module {module_idx + 1} parsing failed: {e}")
-                    logger.warning(f"Module code (first 300 chars): {module_code[:300]!r}...")
+                    logger.debug(f"Module {module_idx + 1} parsing failed: {e}")
+                    logger.debug(f"Module code (first 300 chars): {module_code[:300]!r}...")
                     module_results.append({
                         "module_idx": module_idx,
                         "correct": False,
@@ -422,7 +430,7 @@ def compute_score(
 
                     # If any module passes, consider this variant passed
                     if result.get("correct", False):
-                        logger.info(f"✓ Module {module_idx + 1} passed for variant {variant_key}")
+                        logger.debug(f"✓ Module {module_idx + 1} passed for variant {variant_key}")
                         variant_passed = True
                         break  # Early exit: one passing module is enough
 
@@ -448,7 +456,7 @@ def compute_score(
 
             # Early exit if we found a passing variant
             if variant_passed:
-                logger.info(f"✓ Found correct solution with variant {variant_key}")
+                logger.debug(f"✓ Found correct solution with variant {variant_key}")
                 break
 
         # Compute final score (max across all variants)
@@ -503,7 +511,14 @@ def compute_score(
             if not has_functional_mismatch and error_msgs:
                 raise RuntimeError(f"Verilog verification failed: {error_msgs[0]}")
 
-        return {
+        # Progress tracking: End
+        logger.info(
+            f"CodeV scoring complete: score={final_score:.2f}, "
+            f"modules_extracted={len(extracted_modules)}, "
+            f"variants_passed={sum(rewards)}/{len(rewards)}"
+        )
+
+        result = {
             "score": final_score,
             "reward_fmt": 1.0,  # Format is correct if we got here
             "reward_think": 1.0,  # Thinking structure is present
@@ -513,11 +528,20 @@ def compute_score(
             "verification_results": verification_results[:3]  # Include first 3 for debugging
         }
 
+        # Add error categorization if all modules failed
+        if final_score == 0.0:
+            result["error_category"] = "verification_error"
+            result["error_summary"] = f"All {len(extracted_modules)} module(s) failed verification across {len(rewards)} variant(s) (see verification_results)"
+
+        return result
+
     except Exception as e:
         logger.error(f"Error in compute_score: {e}", exc_info=True)
         return {
             "score": 0.0,
             "reward_fmt": 0.0,
             "reward_think": 0.0,
-            "error": f"Exception: {str(e)}"
+            "error": f"Exception: {str(e)}",
+            "error_category": "system_error",
+            "error_summary": f"Unexpected exception during scoring: {type(e).__name__}"
         }
