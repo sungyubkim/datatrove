@@ -27,7 +27,7 @@ class NormalizedScore(TypedDict, total=False):
     reward_length: float
 
 
-def normalize_score(raw_result, error: str | None = None) -> NormalizedScore:
+def normalize_score(raw_result, error=None) -> NormalizedScore:
     """Normalize any scorer output to standard schema.
 
     Ensures all required fields are present with consistent types to prevent
@@ -40,6 +40,8 @@ def normalize_score(raw_result, error: str | None = None) -> NormalizedScore:
     Returns:
         NormalizedScore with all fields properly typed and present
     """
+    import json
+
     # Handle different input types
     if isinstance(raw_result, dict):
         base = raw_result.copy()
@@ -52,12 +54,42 @@ def normalize_score(raw_result, error: str | None = None) -> NormalizedScore:
         base = {"score": 0.0}
         error = error or f"Invalid scorer result type: {type(raw_result)}"
 
+    # Define standard fields that will be extracted
+    standard_fields = {"score", "error", "reward_think", "reward_fmt", "reward_correct", "reward_length"}
+
+    # Check if there are extra fields (dataset-specific debugging info)
+    extra_fields = {}
+    if isinstance(raw_result, dict):
+        for key, value in raw_result.items():
+            if key not in standard_fields:
+                # Serialize extra fields for preservation
+                extra_fields[key] = value
+
     # Ensure all required fields are present with proper types
     # For Parquet compatibility:
     # - Use empty string "" instead of None for string fields (error)
     # - Use 0.0 instead of None for float fields (reward_*)
     # This prevents PyArrow schema inference issues where None -> null type conflicts with target type
     error_value = error or base.get("error")
+
+    # If there are extra fields to preserve, serialize them and add to error field
+    if extra_fields:
+        try:
+            extra_json = json.dumps(extra_fields, sort_keys=True)
+            debug_info = f"[Debug] {extra_json}"
+
+            # Append to existing error message or use as standalone debug info
+            if error_value:
+                error_value = f"{error_value} {debug_info}"
+            else:
+                error_value = debug_info
+        except Exception as e:
+            # If serialization fails, just note that extra fields existed
+            if error_value:
+                error_value = f"{error_value} [Debug] Failed to serialize extra fields: {e}"
+            else:
+                error_value = f"[Debug] Failed to serialize extra fields: {e}"
+
     normalized: NormalizedScore = {
         "score": float(base.get("score", 0.0)),
         "error": error_value if error_value is not None else "",  # "" instead of None

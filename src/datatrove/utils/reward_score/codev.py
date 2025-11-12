@@ -294,12 +294,30 @@ def compute_score(
                     ground_truth = ground_truth.decode('utf-8')
                     gts = json.loads(ground_truth)
                 except (UnicodeDecodeError, json.JSONDecodeError) as e:
-                    raise ValueError(f"Ground truth bytes are not valid pickle or JSON: {e}")
+                    error_msg = f"Ground truth bytes are not valid pickle or JSON: {e}"
+                    logger.debug(error_msg)
+                    return {
+                        "score": 0.0,
+                        "reward_fmt": 0.0,
+                        "reward_think": 0.0,
+                        "error": error_msg,
+                        "error_category": "system_error",
+                        "error_summary": "Invalid ground truth format (failed to decode as pickle or JSON)"
+                    }
         elif isinstance(ground_truth, str):
             # New format: JSON string
             gts = json.loads(ground_truth)
         else:
-            raise ValueError(f"Unexpected ground_truth type: {type(ground_truth)}")
+            error_msg = f"Unexpected ground_truth type: {type(ground_truth)}"
+            logger.debug(error_msg)
+            return {
+                "score": 0.0,
+                "reward_fmt": 0.0,
+                "reward_think": 0.0,
+                "error": error_msg,
+                "error_category": "system_error",
+                "error_summary": f"Ground truth must be bytes or str, got {type(ground_truth).__name__}"
+            }
 
         # Convert lists back to sets for port info (JSON doesn't support sets or tuples)
         # This applies to both JSON string and bytes-decoded-to-JSON paths
@@ -507,9 +525,22 @@ def compute_score(
                 if has_functional_mismatch:
                     break
 
-            # Raise exception if all modules failed with actual errors (not just wrong answers)
+            # Return error if all modules failed with actual errors (not just wrong answers)
             if not has_functional_mismatch and error_msgs:
-                raise RuntimeError(f"Verilog verification failed: {error_msgs[0]}")
+                error_msg = f"Verilog verification failed: {error_msgs[0]}"
+                logger.debug(error_msg)
+                return {
+                    "score": 0.0,
+                    "reward_fmt": 1.0,  # Format was valid (we extracted modules)
+                    "reward_think": 1.0,  # Thinking was present
+                    "error": error_msg,
+                    "error_category": "verification_error",
+                    "error_summary": f"All {len(extracted_modules)} module(s) failed with system errors (compile/API failure)",
+                    "num_modules_extracted": len(extracted_modules),
+                    "num_variants_tested": len(rewards),
+                    "num_variants_passed": 0,
+                    "verification_results": verification_results[:3]
+                }
 
         # Progress tracking: End
         logger.info(
