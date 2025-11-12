@@ -1,32 +1,84 @@
+#!/usr/bin/env python3
 """
-VERL data processing pipeline example.
+VERL Data Processing Pipeline - Production CLI Tool
 
-This is an EDUCATIONAL EXAMPLE with hardcoded configuration meant for learning
-and experimentation. For production use with CLI interface, see:
-    - CLI tool: scripts/processing/verl_data_processing.py
-    - Usage examples: scripts/processing/run_verl_examples.sh
-    - Documentation: scripts/README.md (processing section)
+Process VERL-formatted data for RLHF training with multi-response generation and reward scoring.
 
-This example demonstrates how to process VERL-formatted data for RLHF training:
-1. Read VERL parquet data (with fields: data_source, prompt, ability, reward_model, extra_info)
-2. Generate multiple responses per prompt using InferenceRunner
-3. Score each response against ground truth using VERL's reward_score utilities
-   - Supports math datasets (GSM8K, MATH, etc.) via math-verify
-   - Supports code execution (codecontests, apps, etc.) via sandbox_fusion
-   - Supports QA datasets (SearchR1, etc.) via exact match
-4. Calculate statistics (avg_score, success_rate, etc.)
-5. Save results back to parquet format
+This tool provides a command-line interface to:
+1. Read VERL parquet data (data_source, prompt, ability, reward_model, extra_info)
+2. Generate multiple responses per prompt using vLLM/SGLang/remote inference servers
+3. Score responses against ground truth using dataset-specific scorers
+4. Calculate aggregate statistics (avg_score, success_rate, etc.)
+5. Save results with automatic checkpointing for resumption
 
-Key Features (also in CLI version):
-- Multi-response generation (configurable N per prompt)
+Supported datasets:
+- Math: GSM8K, MATH, Numina datasets (via math-verify)
+- Code: codecontests, apps (via sandbox_fusion) - multi-language support
+- QA: SearchR1 datasets (exact match)
+- ToolRL: Tool learning tasks (XML/GPT OSS formats)
+- IFEval: Instruction-following benchmarks
+- CodeV: Verilog code generation (requires iverilog + sandbox)
+- Table reasoning: HiTab, WikiTableQuestions, TabFact, FeTaQA
+- Logic: Ordering/zebra puzzles, ARC-AGI tasks
+- And more...
+
+Key Features:
 - Append behavior: Re-processing adds responses instead of replacing
-- Automatic checkpointing for resumption
-- Parallel scoring with rate limiting
-- Explicit PyArrow schema for field preservation (index, error fields)
+- Automatic checkpointing with configurable frequency
+- Parallel inference and scoring with semaphore-based rate limiting
+- Explicit PyArrow schema ensures field preservation (index, error fields)
+- Comprehensive statistics and logging
+
+Usage Examples:
+
+    # Basic usage with default settings
+    python scripts/processing/verl_data_processing.py \\
+        --input-data data/math-verl/train.parquet \\
+        --output-dir output/math-processed \\
+        --model-name-or-path meta-llama/Llama-3-8B
+
+    # Code dataset with Sandbox Fusion
+    python scripts/processing/verl_data_processing.py \\
+        --input-data data/codecontests.parquet \\
+        --output-dir output/code-processed \\
+        --model-name-or-path deepseek-ai/deepseek-coder-7b \\
+        --num-responses-per-prompt 5 \\
+        --sandbox-fusion-url http://localhost:5000 \\
+        --max-concurrent-scoring 20
+
+    # Remote vLLM server with custom settings
+    python scripts/processing/verl_data_processing.py \\
+        --input-data data/large-dataset \\
+        --output-dir output/remote-processed \\
+        --model-name-or-path meta-llama/Llama-3-70B \\
+        --inference-server-type vllm-remote \\
+        --remote-vllm-endpoint http://vllm-cluster:8000 \\
+        --num-responses-per-prompt 15 \\
+        --max-concurrent-inference 200
+
+    # Production run with full control
+    python scripts/processing/verl_data_processing.py \\
+        --input-data data/production \\
+        --output-dir output/prod \\
+        --model-name-or-path Qwen/Qwen2.5-Math-7B \\
+        --num-responses-per-prompt 20 \\
+        --sampling-temperature 0.8 \\
+        --max-tokens-per-response 4096 \\
+        --num-parallel-tasks 50 \\
+        --num-concurrent-workers 10 \\
+        --checkpoint-frequency 1000 \\
+        --checkpoint-dir checkpoints/prod \\
+        --log-dir logs/prod \\
+        --stats-output-dir stats/prod
+
+For more examples, see: scripts/processing/run_verl_examples.sh
+For implementation details, see: examples/verl_data_processing.py
 
 VERL format reference: https://verl.readthedocs.io/en/latest/preparation/prepare_data.html
 """
 
+import argparse
+from pathlib import Path
 from typing import Any, AsyncGenerator
 
 import pyarrow as pa
@@ -43,26 +95,6 @@ from datatrove.pipeline.readers import ParquetReader
 from datatrove.pipeline.stats.base import BaseStats
 from datatrove.pipeline.writers import ParquetWriter
 from datatrove.utils.reward_score import compute_score
-
-
-# ==============================================================================
-# Configuration
-# ==============================================================================
-INPUT_DATA_PATH = "path/to/verl/data"  # Path to VERL parquet files
-OUTPUT_PATH = "output/verl_processed"  # Output directory
-CHECKPOINTS_PATH = "checkpoints/verl"  # Checkpoint directory for resuming
-LOGS_PATH = "logs/verl_processing"  # Logging directory
-STATS_PATH = "stats/verl"  # Statistics output (optional)
-
-# Inference settings
-MODEL_NAME = "meta-llama/Llama-3-8B"
-N_RESPONSES_PER_PROMPT = 10  # Number of responses to generate per prompt
-TEMPERATURE = 0.7  # Sampling temperature for diversity
-MAX_TOKENS = 2048  # Maximum tokens per response
-
-# Reward scoring settings
-SANDBOX_FUSION_URL = None  # Set to your sandbox URL for code execution scoring
-# Example: SANDBOX_FUSION_URL = "http://your-sandbox-server.com:5000"
 
 
 # ==============================================================================
@@ -187,7 +219,7 @@ def verl_to_document_adapter(
 # 2. Multi-Response Query Builder - Generate N responses per prompt
 # ==============================================================================
 async def multi_response_query_builder(
-    runner: InferenceRunner, document: Document
+    runner: InferenceRunner, document: Document, num_responses: int, temperature: float, max_tokens: int
 ) -> AsyncGenerator[dict[str, Any], None]:
     """
     Generate multiple inference requests for a single document.
@@ -198,6 +230,9 @@ async def multi_response_query_builder(
     Args:
         runner: InferenceRunner instance
         document: Input document with VERL data in metadata
+        num_responses: Number of responses to generate
+        temperature: Sampling temperature
+        max_tokens: Maximum tokens per response
 
     Yields:
         Inference request payloads (OpenAI chat completion format)
@@ -206,36 +241,31 @@ async def multi_response_query_builder(
     original_prompt = document.metadata["original_prompt"]
 
     # Generate N requests for diverse responses
-    for i in range(N_RESPONSES_PER_PROMPT):
+    for i in range(num_responses):
         yield {
             "messages": original_prompt,  # Chat messages in VERL format
-            "max_tokens": MAX_TOKENS,
-            "temperature": TEMPERATURE,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
             # Optional: add response index to track which response is which
             "metadata": {"response_index": i},
         }
 
 
 # ==============================================================================
-# 3. Postprocessing - Score all responses and compute statistics
+# 3. Usage Normalization Helper
 # ==============================================================================
 def normalize_usage(usage: dict | None) -> dict:
     """
-    Normalize token usage to a consistent schema for Parquet compatibility.
+    Normalize usage dictionary to consistent format.
 
-    InferenceSuccess.usage may have varying keys depending on the model/server.
-    This ensures all usage dicts have the same structure.
+    Handles None values and missing fields, returning a dictionary
+    with guaranteed keys: prompt_tokens, completion_tokens, total_tokens.
 
     Args:
-        usage: Token usage dict from inference result, or None for failures
+        usage: Usage dictionary from inference result (or None)
 
     Returns:
-        Normalized dict with consistent schema:
-        {
-            "prompt_tokens": int,      # Always present (0 if missing)
-            "completion_tokens": int,  # Always present (0 if missing)
-            "total_tokens": int        # Always present (0 if missing)
-        }
+        Normalized usage dictionary with all fields as integers
     """
     if usage is None:
         return {
@@ -296,7 +326,10 @@ def reconstruct_inference_result(
         )
 
 
-async def postprocess_and_score(runner: InferenceRunner, document: Document) -> Document:
+# ==============================================================================
+# 4. Post-Processing and Scoring Function
+# ==============================================================================
+async def postprocess_and_score(runner: InferenceRunner, document: Document, sandbox_url: str | None) -> Document:
     """
     Post-process document after inference: score responses and compute statistics.
 
@@ -320,6 +353,7 @@ async def postprocess_and_score(runner: InferenceRunner, document: Document) -> 
     Args:
         runner: InferenceRunner instance (provides scoring_semaphore)
         document: Document with inference results
+        sandbox_url: Sandbox Fusion URL for code execution scoring
 
     Returns:
         Updated document with unified_responses and scoring statistics
@@ -355,7 +389,7 @@ async def postprocess_and_score(runner: InferenceRunner, document: Document) -> 
                         data_source,
                         result.text,
                         ground_truth,
-                        sandbox_fusion_url=SANDBOX_FUSION_URL,
+                        sandbox_fusion_url=sandbox_url,
                     )
                 return score_dict
             except Exception as e:
@@ -467,45 +501,6 @@ async def postprocess_and_score(runner: InferenceRunner, document: Document) -> 
         document.metadata["num_failed"] = 0
 
     return document
-
-
-# ==============================================================================
-# 4. Custom Stats Block - Collect statistics across dataset (optional)
-# ==============================================================================
-class ResponseScoreStats(BaseStats):
-    """
-    Collect statistics on response scores across the dataset.
-
-    This block computes statistics for:
-    - Average score per document
-    - Success rate (% of correct responses)
-    - Number of responses generated
-    - Distribution of scores (via histogram grouping)
-
-    Results are saved in: {output_folder}/{group}/{stat_name}/{rank}.json
-    """
-
-    name = "Response Score Statistics"
-
-    def extract_stats(self, doc: Document) -> dict[str, int | float]:
-        """
-        Extract statistics from a single document.
-
-        Args:
-            doc: Document with response score metadata
-
-        Returns:
-            Dictionary of statistics to aggregate
-        """
-        return {
-            "avg_score": doc.metadata.get("avg_score", 0.0),
-            "max_score": doc.metadata.get("max_score", 0.0),
-            "min_score": doc.metadata.get("min_score", 0.0),
-            "success_rate": doc.metadata.get("success_rate", 0.0),
-            "num_responses": doc.metadata.get("num_responses", 0),
-            "num_correct": doc.metadata.get("num_correct", 0),
-            "num_failed": doc.metadata.get("num_failed", 0),
-        }
 
 
 # ==============================================================================
@@ -640,73 +635,327 @@ def document_to_verl_adapter(document: Document) -> dict:
 
 
 # ==============================================================================
-# 6. Pipeline Construction
+# Pipeline Builder - Construct pipeline from CLI arguments
 # ==============================================================================
-pipeline = [
-    # Step 1: Read VERL parquet data
-    ParquetReader(
-        data_folder=INPUT_DATA_PATH,
-        adapter=verl_to_document_adapter,
-        batch_size=100,  # Read 100 rows at a time
-        recursive=True,
-        glob_pattern="*.parquet",
-    ),
-    # Step 2: Generate multiple responses and score them
-    InferenceRunner(
-        query_builder=multi_response_query_builder,
-        config=InferenceConfig(
-            server_type="vllm",  # Options: "vllm", "sglang", "vllm-remote"
-            model_name_or_path=MODEL_NAME,
-            temperature=TEMPERATURE,  # Will be overridden by query_builder
-            max_concurrent_requests=100,  # Adjust based on GPU memory
-            max_concurrent_tasks=200,  # Higher if query_builder is slow
-            metric_interval=120,  # Report metrics every 2 minutes
+def build_pipeline(args):
+    """
+    Build processing pipeline from CLI arguments.
+
+    Args:
+        args: Parsed argparse arguments
+
+    Returns:
+        List of pipeline steps
+    """
+    pipeline = [
+        # Step 1: Read VERL parquet data
+        ParquetReader(
+            data_folder=args.input_data,
+            adapter=verl_to_document_adapter,
+            batch_size=args.batch_size_for_reading,
+            recursive=True,
+            glob_pattern="*.parquet",
         ),
-        output_writer=ParquetWriter(
-            output_folder=OUTPUT_PATH,
-            adapter=document_to_verl_adapter,
-            output_filename="${rank}_chunk_${chunk_index}.parquet",
-            compression="snappy",
-            schema=VERL_SCHEMA,  # Explicit schema preserves error fields
+        # Step 2: Generate multiple responses and score them
+        InferenceRunner(
+            query_builder=lambda runner, doc: multi_response_query_builder(
+                runner, doc, args.num_responses_per_prompt, args.sampling_temperature, args.max_tokens_per_response
+            ),
+            config=InferenceConfig(
+                server_type=args.inference_server_type,
+                model_name_or_path=args.model_name_or_path,
+                temperature=args.sampling_temperature,
+                max_concurrent_requests=args.max_concurrent_inference,
+                max_concurrent_tasks=200,  # Higher if query_builder is slow
+                metric_interval=120,  # Report metrics every 2 minutes
+                external_endpoint=args.remote_vllm_endpoint if args.inference_server_type == "vllm-remote" else None,
+            ),
+            output_writer=ParquetWriter(
+                output_folder=args.output_dir,
+                adapter=document_to_verl_adapter,
+                output_filename=args.output_filename_pattern,
+                compression=args.output_compression,
+                schema=VERL_SCHEMA,  # Explicit schema preserves error fields
+            ),
+            checkpoints_local_dir=args.checkpoint_dir,
+            records_per_chunk=args.checkpoint_frequency,
+            postprocess_fn=lambda runner, doc: postprocess_and_score(runner, doc, args.sandbox_fusion_url),
+            skip_bad_requests=not args.stop_on_bad_request,
+            max_concurrent_scoring=args.max_concurrent_scoring,
         ),
-        checkpoints_local_dir=CHECKPOINTS_PATH,  # Enable checkpointing
-        records_per_chunk=500,  # Save checkpoint every 500 documents
-        postprocess_fn=postprocess_and_score,  # Async scoring - all responses scored in parallel
-        skip_bad_requests=True,  # Skip documents that cause BadRequestError
-        max_concurrent_scoring=50,  # Limit concurrent scoring requests to sandbox (adjust based on sandbox capacity)
-    ),
-    # Step 3 (Optional): Collect statistics
-    # Uncomment to enable statistics collection
-    # ResponseScoreStats(
-    #     output_folder=STATS_PATH,
-    #     groups_to_compute=["summary", "histogram"],  # Aggregate + distribution
-    # ),
-]
+    ]
+
+    # Optional: Add statistics collection if requested
+    if args.stats_output_dir:
+        class ResponseScoreStats(BaseStats):
+            """Collect statistics on response scores and success rates."""
+
+            def extract_stats(self, doc: Document):
+                avg_score = doc.metadata.get("avg_score", 0.0)
+                success_rate = doc.metadata.get("success_rate", 0.0)
+                num_responses = doc.metadata.get("num_responses", 0)
+                return [
+                    ("avg_score", avg_score, "float"),
+                    ("success_rate", success_rate, "float"),
+                    ("num_responses", num_responses, "int"),
+                ]
+
+        pipeline.append(
+            ResponseScoreStats(
+                output_folder=args.stats_output_dir,
+                groups_to_compute=["summary", "histogram"],
+            )
+        )
+
+    return pipeline
 
 
 # ==============================================================================
-# 7. Executor Setup and Execution
+# Main CLI Function
 # ==============================================================================
-if __name__ == "__main__":
-    # Local execution with multiprocessing
-    executor = LocalPipelineExecutor(
-        pipeline=pipeline,
-        logging_dir=LOGS_PATH,
-        tasks=10,  # Number of parallel tasks
-        workers=5,  # Number of concurrent workers
+def main():
+    parser = argparse.ArgumentParser(
+        description="VERL data processing with multi-response generation and reward scoring",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Basic usage
+  python scripts/processing/verl_data_processing.py \\
+      --input-data data/math.parquet \\
+      --output-dir output/math \\
+      --model-name-or-path meta-llama/Llama-3-8B
+
+  # With code execution scoring
+  python scripts/processing/verl_data_processing.py \\
+      --input-data data/code.parquet \\
+      --output-dir output/code \\
+      --model-name-or-path deepseek-coder-7b \\
+      --sandbox-fusion-url http://localhost:5000
+
+For more examples: scripts/processing/run_verl_examples.sh
+For details: examples/verl_data_processing.py
+        """
     )
 
-    executor.run()
+    # ============================================================
+    # Required Arguments
+    # ============================================================
+    required = parser.add_argument_group('required arguments')
+    required.add_argument(
+        '--input-data',
+        required=True,
+        type=str,
+        metavar='PATH',
+        help='Path to input VERL parquet file or directory'
+    )
+    required.add_argument(
+        '--output-dir',
+        required=True,
+        type=str,
+        metavar='PATH',
+        help='Output directory for processed parquet files'
+    )
+    required.add_argument(
+        '--model-name-or-path',
+        required=True,
+        type=str,
+        metavar='TEXT',
+        help='Model name (HuggingFace Hub) or local path (e.g., meta-llama/Llama-3-8B)'
+    )
 
-    # For distributed execution on Slurm:
-    # from datatrove.executor import SlurmPipelineExecutor
-    # executor = SlurmPipelineExecutor(
-    #     pipeline=pipeline,
-    #     logging_dir=LOGS_PATH,
-    #     tasks=100,
-    #     time="24:00:00",
-    #     partition="gpu",
-    #     job_name="verl_processing",
-    #     sbatch_args={"gres": "gpu:1"},  # Request 1 GPU per task
-    # )
-    # executor.run()
+    # ============================================================
+    # Response Generation Settings
+    # ============================================================
+    generation = parser.add_argument_group('response generation settings')
+    generation.add_argument(
+        '--num-responses-per-prompt',
+        type=int,
+        default=10,
+        metavar='INT',
+        help='Number of responses to generate per prompt (default: 10)'
+    )
+    generation.add_argument(
+        '--sampling-temperature',
+        type=float,
+        default=0.7,
+        metavar='FLOAT',
+        help='Sampling temperature for response diversity (default: 0.7)'
+    )
+    generation.add_argument(
+        '--max-tokens-per-response',
+        type=int,
+        default=2048,
+        metavar='INT',
+        help='Maximum tokens per generated response (default: 2048)'
+    )
+
+    # ============================================================
+    # Inference Server Settings
+    # ============================================================
+    server = parser.add_argument_group('inference server settings')
+    server.add_argument(
+        '--inference-server-type',
+        type=str,
+        choices=['vllm', 'sglang', 'vllm-remote'],
+        default='vllm',
+        help='Type of inference server to use (default: vllm)'
+    )
+    server.add_argument(
+        '--remote-vllm-endpoint',
+        type=str,
+        metavar='URL',
+        help='Remote vLLM server endpoint URL (required when --inference-server-type=vllm-remote)'
+    )
+    server.add_argument(
+        '--max-concurrent-inference',
+        type=int,
+        default=100,
+        metavar='INT',
+        help='Maximum concurrent inference requests (default: 100)'
+    )
+
+    # ============================================================
+    # Reward Scoring Settings
+    # ============================================================
+    scoring = parser.add_argument_group('reward scoring settings')
+    scoring.add_argument(
+        '--sandbox-fusion-url',
+        type=str,
+        metavar='URL',
+        help='Sandbox Fusion server URL for code execution scoring (optional, required for code datasets like codecontests)'
+    )
+    scoring.add_argument(
+        '--max-concurrent-scoring',
+        type=int,
+        default=50,
+        metavar='INT',
+        help='Maximum concurrent scoring requests to sandbox server (default: 50)'
+    )
+
+    # ============================================================
+    # Parallel Execution Settings
+    # ============================================================
+    execution = parser.add_argument_group('parallel execution settings')
+    execution.add_argument(
+        '--num-parallel-tasks',
+        type=int,
+        default=10,
+        metavar='INT',
+        help='Number of parallel processing tasks for data sharding (default: 10)'
+    )
+    execution.add_argument(
+        '--num-concurrent-workers',
+        type=int,
+        default=5,
+        metavar='INT',
+        help='Number of concurrent workers per task (default: 5)'
+    )
+
+    # ============================================================
+    # Checkpointing & Logging
+    # ============================================================
+    checkpointing = parser.add_argument_group('checkpointing and logging')
+    checkpointing.add_argument(
+        '--checkpoint-dir',
+        type=str,
+        default='checkpoints/verl',
+        metavar='PATH',
+        help='Directory for saving processing checkpoints (default: checkpoints/verl)'
+    )
+    checkpointing.add_argument(
+        '--log-dir',
+        type=str,
+        default='logs/verl_processing',
+        metavar='PATH',
+        help='Directory for saving execution logs (default: logs/verl_processing)'
+    )
+    checkpointing.add_argument(
+        '--stats-output-dir',
+        type=str,
+        metavar='PATH',
+        help='Directory for statistics output (optional, enables statistics collection if specified)'
+    )
+    checkpointing.add_argument(
+        '--checkpoint-frequency',
+        type=int,
+        default=500,
+        metavar='INT',
+        help='Save checkpoint every N processed documents (default: 500)'
+    )
+
+    # ============================================================
+    # Data Processing Options
+    # ============================================================
+    processing = parser.add_argument_group('data processing options')
+    processing.add_argument(
+        '--batch-size-for-reading',
+        type=int,
+        default=100,
+        metavar='INT',
+        help='Batch size for reading input parquet files (default: 100)'
+    )
+    processing.add_argument(
+        '--output-compression',
+        type=str,
+        choices=['snappy', 'gzip', 'none'],
+        default='snappy',
+        help='Compression algorithm for output parquet files (default: snappy)'
+    )
+    processing.add_argument(
+        '--output-filename-pattern',
+        type=str,
+        default='${rank}_chunk_${chunk_index}.parquet',
+        metavar='TEXT',
+        help='Output filename pattern with variables ${rank} and ${chunk_index} (default: ${rank}_chunk_${chunk_index}.parquet)'
+    )
+
+    # ============================================================
+    # Error Handling
+    # ============================================================
+    error_handling = parser.add_argument_group('error handling')
+    error_handling.add_argument(
+        '--stop-on-bad-request',
+        action='store_true',
+        help='Stop processing when a BadRequestError occurs (default: skip problematic documents and continue)'
+    )
+
+    args = parser.parse_args()
+
+    # Validation
+    if args.inference_server_type == 'vllm-remote' and not args.remote_vllm_endpoint:
+        parser.error('--remote-vllm-endpoint is required when --inference-server-type=vllm-remote')
+
+    # Create output directories if they don't exist
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    Path(args.checkpoint_dir).mkdir(parents=True, exist_ok=True)
+    Path(args.log_dir).mkdir(parents=True, exist_ok=True)
+    if args.stats_output_dir:
+        Path(args.stats_output_dir).mkdir(parents=True, exist_ok=True)
+
+    # Build and run pipeline
+    print(f"Building pipeline with configuration:")
+    print(f"  Input: {args.input_data}")
+    print(f"  Output: {args.output_dir}")
+    print(f"  Model: {args.model_name_or_path}")
+    print(f"  Responses per prompt: {args.num_responses_per_prompt}")
+    print(f"  Temperature: {args.sampling_temperature}")
+    print(f"  Parallel tasks: {args.num_parallel_tasks}")
+    print(f"  Checkpoint frequency: {args.checkpoint_frequency}")
+    print()
+
+    pipeline = build_pipeline(args)
+
+    executor = LocalPipelineExecutor(
+        pipeline=pipeline,
+        logging_dir=args.log_dir,
+        tasks=args.num_parallel_tasks,
+        workers=args.num_concurrent_workers,
+    )
+
+    print("Starting pipeline execution...")
+    executor.run()
+    print("Pipeline execution completed!")
+
+
+if __name__ == "__main__":
+    main()

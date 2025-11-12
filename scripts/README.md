@@ -375,6 +375,95 @@ python scripts/processing/process_local_dataset.py \
 
 ---
 
+### `verl_data_processing.py`
+Complete VERL data processing pipeline with multi-response generation and reward scoring.
+
+**Purpose**: Process VERL-formatted datasets through LLM inference and automatic reward scoring for RLHF training data generation.
+
+**Features**:
+- Multi-response generation per prompt (configurable N responses)
+- Inference server support: vLLM (local/remote) and SGLang
+- Automatic reward scoring with dataset-specific scorers:
+  - Math: GSM8K, MATH, Numina (math-verify)
+  - Code: codecontests, apps (sandbox_fusion, multi-language)
+  - CodeV: Verilog generation (sandbox + iverilog)
+  - ToolRL: Tool learning tasks (XML/GPT OSS formats)
+  - QA: SearchR1 datasets, document QA
+  - And 15+ more dataset types
+- Append behavior: Re-processing adds responses instead of replacing
+- Automatic checkpointing with configurable frequency
+- Parallel scoring with semaphore-based rate limiting
+- Explicit PyArrow schema for field preservation
+- Comprehensive statistics and logging
+
+**Usage**:
+```bash
+# Basic usage with default settings (10 responses)
+python scripts/processing/verl_data_processing.py \
+    --input-data data/math-verl/train.parquet \
+    --output-dir output/math-processed \
+    --model-name-or-path meta-llama/Llama-3-8B
+
+# Code dataset with Sandbox Fusion
+python scripts/processing/verl_data_processing.py \
+    --input-data data/codecontests.parquet \
+    --output-dir output/code-processed \
+    --model-name-or-path deepseek-ai/deepseek-coder-7b \
+    --num-responses-per-prompt 5 \
+    --sandbox-fusion-url http://localhost:5000 \
+    --max-concurrent-scoring 20
+
+# Remote vLLM server with custom settings
+python scripts/processing/verl_data_processing.py \
+    --input-data data/large-dataset \
+    --output-dir output/remote \
+    --model-name-or-path meta-llama/Llama-3-70B \
+    --inference-server-type vllm-remote \
+    --remote-vllm-endpoint http://vllm-cluster:8000 \
+    --num-responses-per-prompt 15
+
+# Production settings (high parallelism)
+python scripts/processing/verl_data_processing.py \
+    --input-data data/production \
+    --output-dir output/prod \
+    --model-name-or-path Qwen/Qwen2.5-Math-7B \
+    --num-responses-per-prompt 20 \
+    --sampling-temperature 0.8 \
+    --num-parallel-tasks 50 \
+    --num-concurrent-workers 10 \
+    --checkpoint-frequency 1000
+```
+
+**Key Parameters**:
+- `--input-data PATH`: VERL parquet input (file or directory)
+- `--output-dir PATH`: Output directory for processed files
+- `--model-name-or-path TEXT`: Model name or path
+- `--num-responses-per-prompt INT`: Responses per prompt (default: 10)
+- `--sampling-temperature FLOAT`: Temperature for diversity (default: 0.7)
+- `--max-tokens-per-response INT`: Max tokens (default: 2048)
+- `--inference-server-type {vllm,sglang,vllm-remote}`: Server type (default: vllm)
+- `--remote-vllm-endpoint URL`: Remote vLLM URL (for vllm-remote)
+- `--sandbox-fusion-url URL`: Sandbox for code scoring (optional)
+- `--num-parallel-tasks INT`: Parallel tasks (default: 10)
+- `--checkpoint-dir PATH`: Checkpoint directory (default: checkpoints/verl)
+- `--checkpoint-frequency INT`: Checkpoint every N docs (default: 500)
+
+**Examples**: See `run_verl_examples.sh` for 8 comprehensive usage scenarios including:
+- Basic math processing
+- Custom generation settings
+- Code execution scoring
+- Remote vLLM usage
+- Production high-parallelism
+- Checkpoint resumption
+- Incremental response generation (append mode)
+- SGLang server usage
+
+**Help**: Run `python scripts/processing/verl_data_processing.py --help` for full parameter list (20+ options)
+
+**See also**: `examples/verl_data_processing.py` for detailed implementation and educational content
+
+---
+
 ## 📤 upload/
 
 Dataset upload utilities.
