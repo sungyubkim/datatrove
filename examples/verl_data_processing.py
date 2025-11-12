@@ -70,6 +70,8 @@ VERL_SCHEMA = pa.schema([
         ('ground_truth', pa.string())
     ])),
     ('extra_info', pa.struct([
+        # Original VERL metadata field (preserved from input)
+        ('index', pa.int64()),
         # Unified responses list with all inference + scoring fields
         ('responses', pa.list_(pa.struct([
             # Inference result fields
