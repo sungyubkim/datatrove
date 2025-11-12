@@ -313,6 +313,9 @@ async def postprocess_and_score(runner: InferenceRunner, document: Document) -> 
     """
     import asyncio
 
+    # Read existing responses from previous processing runs (for append behavior)
+    existing_responses = document.metadata.get("extra_info", {}).get("responses", [])
+
     inference_results = document.metadata.get("inference_results", [])
     # Reconstruct objects from checkpoint dictionaries
     inference_results = [reconstruct_inference_result(r) for r in inference_results]
@@ -413,26 +416,31 @@ async def postprocess_and_score(runner: InferenceRunner, document: Document) -> 
                 }
             )
 
-    # Compute aggregate statistics
-    if unified_responses:
-        valid_scores = [r["score"] for r in unified_responses]
-        # Store unified responses (used by both checkpoints and output adapter)
-        document.metadata["unified_responses"] = unified_responses
+    # Merge existing responses (from previous runs) with new responses (append behavior)
+    # This allows incremental response generation: run 1 generates 10, run 2 adds 10 more = 20 total
+    all_responses = existing_responses + unified_responses
+
+    # Compute aggregate statistics from ALL responses (existing + new)
+    if all_responses:
+        valid_scores = [r["score"] for r in all_responses]
+        # Store ALL responses (used by both checkpoints and output adapter)
+        document.metadata["unified_responses"] = all_responses
         # Remove inference_results to prevent checkpoint duplication
         # (unified_responses contains all the same data + scores)
         document.metadata.pop("inference_results", None)
+        # Recalculate statistics from ALL responses (not just new ones)
         document.metadata["avg_score"] = sum(valid_scores) / len(valid_scores)
         document.metadata["max_score"] = max(valid_scores)
         document.metadata["min_score"] = min(valid_scores)
         document.metadata["num_correct"] = sum(
-            int(r["score"] > 0) for r in unified_responses
+            int(r["score"] > 0) for r in all_responses
         )
         document.metadata["success_rate"] = document.metadata["num_correct"] / len(
-            unified_responses
+            all_responses
         )
-        document.metadata["num_responses"] = len(unified_responses)
+        document.metadata["num_responses"] = len(all_responses)
         document.metadata["num_failed"] = sum(
-            1 for r in unified_responses if r["score_error"]
+            1 for r in all_responses if r["score_error"]
         )
     else:
         # No responses generated
