@@ -98,6 +98,18 @@ from datatrove.utils.reward_score import compute_score
 
 
 # ==============================================================================
+# Module-Level Configuration (Set from CLI Arguments)
+# ==============================================================================
+# These module-level variables are set by build_pipeline() from CLI arguments.
+# Using module globals instead of lambda closures ensures picklability for
+# multiprocessing (LocalPipelineExecutor with workers > 1).
+NUM_RESPONSES_PER_PROMPT = 10
+SAMPLING_TEMPERATURE = 0.7
+MAX_TOKENS_PER_RESPONSE = 2048
+SANDBOX_FUSION_URL = None
+
+
+# ==============================================================================
 # PyArrow Schema Definition for VERL Format
 # ==============================================================================
 # Explicit schema prevents PyArrow from dropping fields during automatic schema inference.
@@ -219,7 +231,7 @@ def verl_to_document_adapter(
 # 2. Multi-Response Query Builder - Generate N responses per prompt
 # ==============================================================================
 async def multi_response_query_builder(
-    runner: InferenceRunner, document: Document, num_responses: int, temperature: float, max_tokens: int
+    runner: InferenceRunner, document: Document
 ) -> AsyncGenerator[dict[str, Any], None]:
     """
     Generate multiple inference requests for a single document.
@@ -227,12 +239,14 @@ async def multi_response_query_builder(
     This async generator yields N inference requests for each document,
     enabling the generation of multiple diverse responses per prompt.
 
+    Configuration is read from module-level globals (set by build_pipeline):
+        - NUM_RESPONSES_PER_PROMPT: Number of responses to generate
+        - SAMPLING_TEMPERATURE: Sampling temperature
+        - MAX_TOKENS_PER_RESPONSE: Maximum tokens per response
+
     Args:
         runner: InferenceRunner instance
         document: Input document with VERL data in metadata
-        num_responses: Number of responses to generate
-        temperature: Sampling temperature
-        max_tokens: Maximum tokens per response
 
     Yields:
         Inference request payloads (OpenAI chat completion format)
@@ -240,12 +254,12 @@ async def multi_response_query_builder(
     # Extract original prompt from metadata
     original_prompt = document.metadata["original_prompt"]
 
-    # Generate N requests for diverse responses
-    for i in range(num_responses):
+    # Generate N requests for diverse responses (using module-level config)
+    for i in range(NUM_RESPONSES_PER_PROMPT):
         yield {
             "messages": original_prompt,  # Chat messages in VERL format
-            "max_tokens": max_tokens,
-            "temperature": temperature,
+            "max_tokens": MAX_TOKENS_PER_RESPONSE,
+            "temperature": SAMPLING_TEMPERATURE,
             # Optional: add response index to track which response is which
             "metadata": {"response_index": i},
         }
@@ -329,7 +343,7 @@ def reconstruct_inference_result(
 # ==============================================================================
 # 4. Post-Processing and Scoring Function
 # ==============================================================================
-async def postprocess_and_score(runner: InferenceRunner, document: Document, sandbox_url: str | None) -> Document:
+async def postprocess_and_score(runner: InferenceRunner, document: Document) -> Document:
     """
     Post-process document after inference: score responses and compute statistics.
 
@@ -350,10 +364,12 @@ async def postprocess_and_score(runner: InferenceRunner, document: Document, san
     4. Computes aggregate statistics (avg, max, success rate, etc.)
     5. Stores unified_responses in document.metadata for checkpoints and output
 
+    Configuration is read from module-level global:
+        - SANDBOX_FUSION_URL: Sandbox Fusion URL for code execution scoring
+
     Args:
         runner: InferenceRunner instance (provides scoring_semaphore)
         document: Document with inference results
-        sandbox_url: Sandbox Fusion URL for code execution scoring
 
     Returns:
         Updated document with unified_responses and scoring statistics
@@ -389,7 +405,7 @@ async def postprocess_and_score(runner: InferenceRunner, document: Document, san
                         data_source,
                         result.text,
                         ground_truth,
-                        sandbox_fusion_url=sandbox_url,
+                        sandbox_fusion_url=SANDBOX_FUSION_URL,
                     )
                 return score_dict
             except Exception as e:
@@ -647,6 +663,14 @@ def build_pipeline(args):
     Returns:
         List of pipeline steps
     """
+    # Set module-level configuration from CLI arguments
+    # This ensures pickability for multiprocessing (avoids lambda closure issues)
+    global NUM_RESPONSES_PER_PROMPT, SAMPLING_TEMPERATURE, MAX_TOKENS_PER_RESPONSE, SANDBOX_FUSION_URL
+    NUM_RESPONSES_PER_PROMPT = args.num_responses_per_prompt
+    SAMPLING_TEMPERATURE = args.sampling_temperature
+    MAX_TOKENS_PER_RESPONSE = args.max_tokens_per_response
+    SANDBOX_FUSION_URL = args.sandbox_fusion_url
+
     pipeline = [
         # Step 1: Read VERL parquet data
         ParquetReader(
@@ -658,9 +682,7 @@ def build_pipeline(args):
         ),
         # Step 2: Generate multiple responses and score them
         InferenceRunner(
-            query_builder=lambda runner, doc: multi_response_query_builder(
-                runner, doc, args.num_responses_per_prompt, args.sampling_temperature, args.max_tokens_per_response
-            ),
+            query_builder=multi_response_query_builder,  # Direct reference (no lambda)
             config=InferenceConfig(
                 server_type=args.inference_server_type,
                 model_name_or_path=args.model_name_or_path,
@@ -679,7 +701,7 @@ def build_pipeline(args):
             ),
             checkpoints_local_dir=args.checkpoint_dir,
             records_per_chunk=args.checkpoint_frequency,
-            postprocess_fn=lambda runner, doc: postprocess_and_score(runner, doc, args.sandbox_fusion_url),
+            postprocess_fn=postprocess_and_score,  # Direct reference (no lambda)
             skip_bad_requests=not args.stop_on_bad_request,
             max_concurrent_scoring=args.max_concurrent_scoring,
         ),
