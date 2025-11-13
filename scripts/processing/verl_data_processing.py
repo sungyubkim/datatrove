@@ -329,9 +329,6 @@ class PostprocessAndScore:
                 all_responses
             )
             document.metadata["num_responses"] = len(all_responses)
-            document.metadata["num_failed"] = sum(
-                1 for r in all_responses if r["score_error"]
-            )
         else:
             # No responses generated
             document.metadata["unified_responses"] = []
@@ -341,7 +338,6 @@ class PostprocessAndScore:
             document.metadata["num_correct"] = 0
             document.metadata["success_rate"] = 0.0
             document.metadata["num_responses"] = 0
-            document.metadata["num_failed"] = 0
 
         return document
 
@@ -395,7 +391,14 @@ VERL_SCHEMA = pa.schema([
     ('extra_info', pa.struct([
         # Original VERL metadata field (preserved from input)
         ('index', pa.int64()),
-        # Unified responses list with all inference + scoring fields
+        # Aggregate statistics (displayed first for better UX in parquet viewers)
+        ('avg_score', pa.float64()),
+        ('max_score', pa.float64()),
+        ('min_score', pa.float64()),
+        ('success_rate', pa.float64()),
+        ('num_correct', pa.int64()),
+        ('num_responses', pa.int64()),
+        # Unified responses list with all inference + scoring fields (at end to not block view)
         ('responses', pa.list_(pa.struct([
             # Inference result fields
             ('text', pa.string()),
@@ -414,15 +417,7 @@ VERL_SCHEMA = pa.schema([
             ('reward_fmt', pa.float64()),
             ('reward_correct', pa.float64()),
             ('reward_length', pa.float64())
-        ]))),
-        # Aggregate statistics
-        ('avg_score', pa.float64()),
-        ('max_score', pa.float64()),
-        ('min_score', pa.float64()),
-        ('success_rate', pa.float64()),
-        ('num_correct', pa.int64()),
-        ('num_responses', pa.int64()),
-        ('num_failed', pa.int64())
+        ])))
     ]))
 ])
 
@@ -681,7 +676,6 @@ def document_to_verl_adapter(self, document: Document) -> dict:
             "success_rate": document.metadata.get("success_rate", 0.0),
             "num_correct": document.metadata.get("num_correct", 0),
             "num_responses": document.metadata.get("num_responses", 0),
-            "num_failed": document.metadata.get("num_failed", 0),
         }
     )
 
