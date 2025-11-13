@@ -522,7 +522,7 @@ async def postprocess_and_score(runner: InferenceRunner, document: Document) -> 
 # ==============================================================================
 # 5. Output Adapter - Convert Document back to VERL format + results
 # ==============================================================================
-def document_to_verl_adapter(document: Document) -> dict:
+def document_to_verl_adapter(self, document: Document) -> dict:
     """
     Convert processed Document back to VERL parquet format with results in extra_info.
 
