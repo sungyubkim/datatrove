@@ -380,7 +380,6 @@ if __name__ == '__main__':
     except Exception as e:
         error_msg = f"API Request Exception during check_correctness for case {case_index + 1}: {e}"
         logger.error(f"Case {case_index + 1}: {error_msg}")
-        traceback.print_exc()
 
     metadata = {
         "case_index": case_index,

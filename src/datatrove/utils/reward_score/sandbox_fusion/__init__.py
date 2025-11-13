@@ -69,7 +69,7 @@ def convert_leetcode_format(leetcode_test_cases):
 
 
 def compute_score(
-    sandbox_fusion_url, concurrent_semaphore, memory_limit_mb, completion, test_cases, continuous=False, timeout=10
+    sandbox_fusion_url, concurrent_semaphore, memory_limit_mb, completion, test_cases, continuous=False, timeout=200
 ):
     """
     Computes the code score using the remote sandbox API.
@@ -179,7 +179,6 @@ def compute_score(
 
     except Exception as e:
         logger.error(f"Error during compute_score: {e}")
-        traceback.print_exc()
         score = 0.0
         # Try to return partial metadata if available, otherwise return error info
         final_metadata = metadata_list if "metadata_list" in locals() else [{"error": f"Unhandled exception: {e}"}]
