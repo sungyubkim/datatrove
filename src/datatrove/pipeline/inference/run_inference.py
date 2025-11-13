@@ -776,6 +776,11 @@ class InferenceRunner(PipelineStep):
                 # Get payloads from query_builder
                 payloads_result = self.query_builder(self, doc)
 
+                # If calling the query_builder returned a coroutine, await it first
+                # (happens when query_builder is a callable class with async __call__)
+                if asyncio.iscoroutine(payloads_result):
+                    payloads_result = await payloads_result
+
                 # Handle different return types
                 request_tasks = []
 
@@ -817,11 +822,14 @@ class InferenceRunner(PipelineStep):
 
                 # Post-process the document if a function is provided. We still want the actual document for checkpointing purposes.
                 if self.postprocess_fn:
-                    # Check if postprocess_fn is async and await if needed
-                    if asyncio.iscoroutinefunction(self.postprocess_fn):
-                        postprocess_result = await self.postprocess_fn(self, doc)
+                    # Call the postprocess function (works for both functions and callable classes)
+                    result = self.postprocess_fn(self, doc)
+
+                    # Check if the RESULT is a coroutine (works for both async functions and async __call__)
+                    if asyncio.iscoroutine(result):
+                        postprocess_result = await result
                     else:
-                        postprocess_result = self.postprocess_fn(self, doc)
+                        postprocess_result = result
 
                     if postprocess_result is None:
                         doc.metadata["postprocess_remove"] = True
