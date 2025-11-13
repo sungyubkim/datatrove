@@ -507,6 +507,10 @@ class InferenceRunner(PipelineStep):
         # Scoring semaphore will be initialized in run() where event loop exists
         self._scoring_semaphore: asyncio.Semaphore | None = None
 
+        # Queue for yielding documents in pipeline chaining mode
+        # When not None, processed documents are queued for yielding to next pipeline step
+        self._processed_documents_queue: asyncio.Queue | None = None
+
     async def metrics_reporter(self, interval: int = 600):
         """
         Periodically report metrics and queue sizes.
@@ -701,6 +705,10 @@ class InferenceRunner(PipelineStep):
             self.stat_update("successful_documents", value=1)
 
             await self.checkpoint_manager.write_document(document, rank, chunk_index, output_writer_context)
+
+            # Queue document for yielding if in pipeline chain mode
+            if self._processed_documents_queue is not None:
+                await self._processed_documents_queue.put(document)
 
         except Exception as e:
             logger.warning(f"Failed to process inference results for metrics: {e}")
@@ -900,7 +908,11 @@ class InferenceRunner(PipelineStep):
                     # Use asyncio.to_thread to avoid blocking event loop with I/O
                     await asyncio.to_thread(output_writer_context.close_file, filename)
 
-        # 5. shutdown inference server and metrics
+        # 5. Signal completion if in pipeline chain mode
+        if self._processed_documents_queue is not None:
+            await self._processed_documents_queue.put(None)  # Sentinel value to signal completion
+
+        # 6. shutdown inference server and metrics
         server_task.cancel()
         metrics_task.cancel()
 
@@ -923,3 +935,82 @@ class InferenceRunner(PipelineStep):
         """
         with self.track_time(unit="total"):
             asyncio.run(self.run_async(data, rank, world_size))
+
+    def run_with_yield(
+        self,
+        data: Iterable[Document],
+        rank: int = 0,
+        world_size: int = 1,
+    ) -> DocumentsPipeline:
+        """
+        Process `data` with inference and yield processed documents for pipeline chaining.
+
+        This method enables InferenceRunner to be used as an intermediate pipeline step,
+        allowing downstream steps (like stats collection) to consume the processed documents.
+
+        Args:
+            data: Iterable of Document objects to process
+            rank: Process rank identifier for distributed processing
+            world_size: Total number of processes in distributed setup
+
+        Yields:
+            Processed Document objects with inference results
+        """
+        import asyncio
+        import concurrent.futures
+        from queue import Queue, Empty
+
+        # Create sync queue for thread-safe communication between async and sync contexts
+        sync_queue: Queue[Document | None] = Queue()
+
+        async def async_worker():
+            """Run async processing and populate queue."""
+            # Initialize async queue for internal use
+            self._processed_documents_queue = asyncio.Queue()
+
+            # Launch async processing in background
+            async_task = asyncio.create_task(self.run_async(data, rank, world_size))
+
+            # Transfer documents from async queue to sync queue
+            try:
+                while True:
+                    doc = await self._processed_documents_queue.get()
+                    sync_queue.put(doc)  # Put into sync queue for yielding
+                    if doc is None:  # Sentinel value signals completion
+                        break
+            except Exception as e:
+                logger.error(f"Error in async worker: {e}")
+                sync_queue.put(None)  # Ensure sentinel is sent even on error
+                raise
+            finally:
+                # Wait for async processing to complete
+                await async_task
+                # Clean up
+                self._processed_documents_queue = None
+
+        # Run async worker in background thread
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(lambda: asyncio.run(async_worker()))
+
+            # Yield documents from sync queue
+            with self.track_time(unit="total"):
+                while True:
+                    try:
+                        # Get document from queue (timeout to allow checking for exceptions)
+                        doc = sync_queue.get(timeout=0.1)
+
+                        if doc is None:  # Sentinel value signals completion
+                            break
+
+                        yield doc
+
+                    except Empty:
+                        # Check if background task failed
+                        if future.done():
+                            # Re-raise any exception from async worker
+                            future.result()
+                            break
+                        continue
+
+            # Wait for background task to complete
+            future.result()

@@ -735,6 +735,7 @@ def build_pipeline(args):
             glob_pattern="*.parquet",
         ),
         # Step 2: Generate multiple responses and score them
+        # Use .run_with_yield method reference to enable pipeline chaining
         InferenceRunner(
             query_builder=query_builder,  # Picklable callable instance
             config=InferenceConfig(
@@ -758,7 +759,7 @@ def build_pipeline(args):
             postprocess_fn=postprocess_fn,  # Picklable callable instance
             skip_bad_requests=not args.stop_on_bad_request,
             max_concurrent_scoring=args.max_concurrent_scoring,
-        ),
+        ).run_with_yield,  # Method reference for pipeline chaining
     ]
 
     # Optional: Add statistics collection if requested
