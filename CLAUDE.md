@@ -8,63 +8,25 @@ DataTrove is a library for processing, filtering, and deduplicating text data at
 
 ## Development Commands
 
-### Setup
-
-**Using uv (Recommended):**
+### Setup & Testing
 ```bash
-uv pip install -e ".[dev]"  # Install with all dev dependencies
-uv run pre-commit install   # Install pre-commit hooks
+# Setup (Python >= 3.10.0 required)
+uv pip install -e ".[dev]"     # Recommended: Install with uv
+uv run pre-commit install      # Setup pre-commit hooks
+# Alternative: pip install -e ".[dev]" && pre-commit install
 
-# Run scripts with uv
-uv run python examples/example_script.py
-```
+# Testing
+uv run pytest -sv ./tests/                           # Run all tests
+uv run pytest -sv ./tests/pipeline/test_filters.py   # Specific test file
+make test                                            # Run tests via make
 
-**Using pip:**
-```bash
-pip install -e ".[dev]"  # Install with all dev dependencies
-pre-commit install       # Install pre-commit hooks
-```
-
-Note: This project requires Python >= 3.10.0
-
-### Testing
-
-**Using uv:**
-```bash
-# Run all tests
-uv run pytest -sv ./tests/
-
-# Run specific test file
-uv run pytest -sv ./tests/pipeline/test_filters.py
-
-# Run specific test
-uv run pytest -sv ./tests/pipeline/test_filters.py::test_filter_name
-```
-
-**Using make:**
-```bash
-# Run all tests
-make test
-```
-
-### Code Quality
-```bash
-# Check code quality (linter + formatter)
-make quality
-
-# Auto-fix code style issues
-make style
+# Code Quality
+make quality    # Check code quality (linter + formatter)
+make style      # Auto-fix code style issues
 ```
 
 ### CLI Tools
-After installation, several command-line tools are available:
-- `merge_stats` - Merge statistics from multiple tasks
-- `check_dataset` - Validate dataset integrity
-- `failed_logs` - View logs from failed tasks
-- `inspect_data` - Inspect processed data
-- `jobs_status` - Check status of pipeline jobs
-- `track_jobs` - Track multiple pipeline jobs
-- `launch_pickled_pipeline` - Execute pickled pipeline configurations
+After installation: `merge_stats`, `check_dataset`, `failed_logs`, `inspect_data`, `jobs_status`, `track_jobs`, `launch_pickled_pipeline`
 
 ## Architecture
 
@@ -201,194 +163,69 @@ runner = InferenceRunner(
 - Located in `src/datatrove/preprocessing/`
 
 **Supported Dataset Types:**
-- **Math datasets** (via `math_verify`):
-  - GSM8K: `openai/gsm8k`
-  - MATH: `lighteval/MATH`, `DigitalLearningGmbH/MATH-lighteval`, `HuggingFaceH4/MATH-500`
-  - Numina datasets: `numina_aops_forum`, `numina_synthetic_math`, `numina_amc_aime`, etc.
-  - Uses answer extraction and exact match comparison
-  - Supports both XML (`<think>`, `\boxed{}`) and GPT OSS (`<|channel|>analysis`, `<|channel|>final`) formats
-  - Auto-format detection via `format_type="auto"`
 
-- **Code execution** (via `sandbox_fusion`):
-  - `codecontests`, `apps`, `codeforces`, `taco`
-  - Requires external sandbox fusion server for secure code execution
-  - Must set `sandbox_fusion_url` parameter or will raise ValueError
-  - **Multi-language support**: Python, C++, Java, Go, Rust, and 24+ more languages
-  - Automatic language detection from code blocks (e.g., ````cpp`, ````java`)
-  - Language mapping: `py3`/`py2` → `python`, `c++`/`c++17` → `cpp`
-  - Fallback to Python for unsupported languages
+| Category | Datasets | Scorer | Key Requirements | Format Support |
+|----------|----------|--------|------------------|----------------|
+| **Math** | gsm8k, MATH, numina_* | `math_verify` | None | XML, GPT OSS (`format_type="auto"`) |
+| **Code** | codecontests, apps, codeforces, taco | `sandbox_fusion` | `sandbox_fusion_url` | 24+ languages (auto-detect) |
+| **Geometry** | geometry3k | `geo3k` | mathruler | N/A |
+| **QA/SearchR1** | searchR1_nq, searchR1_triviaqa, etc. | `search_r1_like_qa_em` | None | N/A |
+| **ToolRL** | rlla, toolrl, toolace, hammer, xlam | `toolrl` | None | XML, GPT OSS (`format_type="auto"`) |
+| **IFEval** | ifeval, ifbench, IF_multi_constraints | `ifeval` | langdetect, nltk | XML, GPT OSS |
+| **CodeV** | codev, codev-r1-verl | `codev` | `sandbox_fusion_url`, iverilog | XML, GPT OSS (`format_type="auto"`) |
+| **Table** | WTQ, TabFact, FeTaQA, hitab, finqa | `table_*` | rouge-score, sacrebleu | N/A |
+| **DocQA** | multihoprag, musique, docmath | `docqa`/`docmath` | None | N/A |
+| **Long Context** | long_toc_choices | `long` | None | N/A |
+| **Logic** | arcagi, puzzle datasets | `logic` | None | N/A |
 
-- **Geometry** (via `geo3k`):
-  - `hiyouga/geometry3k`
-  - Uses mathruler for geometric problem evaluation
-
-- **QA/SearchR1** (via `search_r1_like_qa_em`):
-  - `searchR1_nq`, `searchR1_triviaqa`, `searchR1_popqa`, `searchR1_hotpotqa`, etc.
-  - Exact match scoring for question-answering tasks
-  - Ground truth must be dict format: `{"target": [answers]}`
-
-- **ToolRL** (via `toolrl`):
-  - `rlla`, `toolrl`, `tool_learning`, `toolace`, `hammer`, `xlam`, `sungyub/toolrl-verl`, `rlla_gpt`
-  - Evaluates tool learning tasks with three components:
-    - Format reward: Structure validation for XML (`<think>`, `<tool_call>`, `<response>`) or GPT OSS (`<|channel|>analysis`, `to=functions.X`, `<|channel|>final`) formats
-    - Correctness reward: Tool name and parameter matching (frequency-based scoring)
-    - Length reward (optional): Reasoning length in thinking sections
-  - **Format Support**:
-    - **XML format**: Traditional tags (`<think>`, `<tool_call>`, `<response>`) - Qwen/Llama default
-    - **GPT OSS format**: Special tokens (`<|start|>`, `<|channel|>`, `<|message|>`, `<|end|>`, `<|call|>`, `<|return|>`) - GPT OSS 120B
-    - Auto-detection by default via `format_type="auto"`
-  - Supports Llama, Qwen, and GPT OSS chat templates with auto-detection
-  - No external dependencies required (pure Python)
-  - Returns dict with `score`, `reward_fmt`, `reward_correct`, `reward_length`, `reward_think`
-  - **Environment Variables (VERL Compatibility)**:
-    - `WITHLENGTH=1`: Auto-enable length reward component
-    - `CORRECTMAX1=1`: Set correctness max reward to 1 (default: 3)
-    - `SCHEDULEREWARD=1`: Apply step-based reward scaling
-    - `SCHEDULELENGTH=1`: Dynamic length threshold scaling
-    - `REFINEDREWARD=1`: Strict exact matching (no partial credit)
-    - `COARSEREWARD=1`: Binary match/no-match scoring
-    - `INTERMEDIATEREWARD=1`: Simplified intermediate scoring
-  - **Migration Note**: `toolrl_gpt_oss.py` has been removed. Use unified `toolrl.py` with `format_type="gpt_oss"` or `"auto"`
-
-- **IFEval** (via `ifeval`):
-  - `allenai/IF_multi_constraints_upto5`, `ifeval`, `sungyub/ifbench-verl`, `sungyub/ifeval-rlvr-verl`
-  - Instruction-following evaluation with constraint checking
-  - Python dependencies: `langdetect`, `immutabledict`, `nltk` (auto-installed with `reward_scoring`)
-  - Validates adherence to specific instructions and constraints
-
-- **CodeV** (via `codev`):
-  - `codev`, `sungyub/codev-r1-verl`
-  - Verilog code generation with equivalence checking
-  - **System Requirements**:
-    - Icarus Verilog (`iverilog`) must be installed:
-      - macOS: `brew install icarus-verilog`
-      - Ubuntu/Debian: `apt-get install iverilog`
-      - Verify: `which iverilog` should return a valid path
-    - Python dependencies: `psutil`, `networkx` (auto-installed with `reward_scoring`)
-  - **External Dependencies**:
-    - Requires Sandbox Fusion server for Verilog simulation
-    - Must set `sandbox_fusion_url` parameter or will raise ValueError
-  - **Format Support**:
-    - **XML format**: `<think>`, `<answer>` tags
-    - **GPT OSS format**: `<|channel|>analysis`, `<|channel|>final` blocks
-    - Auto-detection via `format_type="auto"`
-  - Evaluation process:
-    - Extracts Verilog code from markdown code blocks
-    - Generates automatic testbenches (random + directed tests)
-    - Runs equivalence checking via Sandbox Fusion
-    - Supports multiple ground truth variants per problem
-  - Returns dict with `score`, `reward_fmt`, `reward_think`, verification details
-
-- **Table Reasoning** (via `table_boxed`, `tqa`, `tfv`, `ff_tqa`):
-  - **Boxed answer format**: `hitab`, `multihier`, `finqa` - Guru datasets with boxed answers
-  - **Table QA**: `WTQ` (WikiTableQuestions), `HiTab` - JSON list answers
-  - **Table Fact Verification**: `TabFact` - Binary entailment/refutation (True/False)
-  - **Free-form Table QA**: `FeTaQA` - BLEU/ROUGE scoring for free-form answers
-  - Python dependencies: `rouge-score`, `sacrebleu` (in base dependencies)
-  - Evaluation methods vary by dataset type
-
-- **Document QA and Long Context** (via `docqa`, `docmath`, `long`):
-  - **Document QA**: `multihoprag`, `musique` - Multi-hop QA with exact match/F1 scoring
-  - **Document Math**: `docmath` - Math problems in document context with numeric answers
-  - **Long Context Multiple Choice**: `long_toc_choices` - Multiple choice QA (A-D) for long contexts
-  - Uses exact match and F1 metrics for answer validation
-
-- **Logic and Reasoning** (via `logic`):
-  - `ordering_puzzle`, `zebra_puzzle`, `graph_logical` - Constraint satisfaction problems
-  - `arcagi1`, `arcagi2`, `barc` - ARC-AGI abstract reasoning tasks
-  - General pattern matching: any dataset with `puzzle`, `arcagi`, or `barc` in name
-  - Evaluates logical reasoning and pattern recognition capabilities
+**Key Features:**
+- **Multi-language code execution**: Python, C++, Java, Go, Rust, JavaScript, and 20+ more (automatic language detection from code blocks)
+- **Format auto-detection**: Supports both XML (`<think>`, `<tool_call>`) and GPT OSS (`<|channel|>`) formats with `format_type="auto"`
+- **VERL compatibility**: Environment variables for reward tuning (WITHLENGTH, CORRECTMAX1, SCHEDULEREWARD, etc.)
+- **CodeV requirements**: Icarus Verilog (`brew install icarus-verilog` on macOS) + Sandbox Fusion server
 
 **Installation:**
 ```bash
 pip install -e ".[reward_scoring]"  # Installs all reward scoring dependencies
-# For CodeV: Also install Icarus Verilog (see system requirements above)
+# For CodeV: brew install icarus-verilog (macOS) or apt-get install iverilog (Ubuntu)
 ```
 
-**Note**: The reward scoring system supports both XML and GPT OSS formats across all applicable dataset types. Use `format_type="auto"` for automatic format detection, or explicitly set `format_type="xml"` or `format_type="gpt_oss"` as needed.
-
-**Usage Example:**
+**Usage Examples:**
 ```python
 from datatrove.utils.reward_score import compute_score
 
-# Math dataset scoring - XML format (default)
+# Math dataset - Auto-format detection
 score = compute_score(
     data_source="openai/gsm8k",
     solution_str="<think>Let me calculate...</think>\nThe answer is \\boxed{42}",
     ground_truth="\\boxed{42}",
-    format_type="auto"  # Auto-detect format (xml/gpt_oss)
+    format_type="auto"  # Auto-detects XML or GPT OSS format
 )
 
-# Math dataset scoring - GPT OSS format
-score = compute_score(
-    data_source="openai/gsm8k",
-    solution_str=(
-        "<|start|>assistant<|channel|>analysis<|message|>Let me calculate...<|end|>\n"
-        "<|start|>assistant<|channel|>final<|message|>\\boxed{42}<|return|>"
-    ),
-    ground_truth="\\boxed{42}",
-    format_type="gpt_oss"
-)
-
-# Code execution scoring - Python (requires sandbox)
+# Code execution - Multi-language support (Python, C++, Java, Go, etc.)
 score = compute_score(
     data_source="codecontests",
-    solution_str="```python\ndef solution(): return 42\n```",
+    solution_str="```python\ndef solution(): return 42\n```",  # Also: ```cpp, ```java, etc.
     ground_truth={"inputs": ["5"], "outputs": ["42"]},
     sandbox_fusion_url="http://sandbox-server:5000"
 )
 
-# Code execution scoring - C++ (automatic language detection)
-score = compute_score(
-    data_source="codecontests",
-    solution_str="```cpp\n#include <iostream>\nint main() { std::cout << 42; }\n```",
-    ground_truth={"inputs": ["5"], "outputs": ["42"]},
-    sandbox_fusion_url="http://sandbox-server:5000"
-)
-
-# Code execution scoring - Java (automatic language detection)
-score = compute_score(
-    data_source="codecontests",
-    solution_str="```java\npublic class Main { public static void main(String[] args) { System.out.println(42); } }\n```",
-    ground_truth={"inputs": ["5"], "outputs": ["42"]},
-    sandbox_fusion_url="http://sandbox-server:5000"
-)
-
-# ToolRL scoring - Tool learning tasks (XML format)
+# ToolRL - Format auto-detection with length reward
 score = compute_score(
     data_source="toolrl",
-    solution_str="<think>I need to search for information</think>\n<tool_call>\n{\"name\": \"search\", \"parameters\": {\"query\": \"AI\"}}\n</tool_call>",
-    ground_truth="<think>...</think>\n<tool_call>\n{\"name\": \"search\", \"parameters\": {\"query\": \"AI\"}}\n</tool_call>",
-    model_type="auto",  # Auto-detect chat template (llama/qwen)
-    format_type="auto",  # Auto-detect format (xml/gpt_oss)
+    solution_str="<think>I need to search</think>\n<tool_call>{\"name\": \"search\", ...}</tool_call>",
+    ground_truth="...",
+    format_type="auto",  # Works with both XML and GPT OSS
     enable_length_reward=True
 )
 
-# ToolRL scoring - GPT OSS format
-score = compute_score(
-    data_source="toolrl",
-    solution_str=(
-        "<|start|>assistant<|channel|>analysis<|message|>I need to search for information<|end|>\n"
-        "<|start|>assistant to=functions.search<|channel|>commentary json<|message|>"
-        "{\"query\": \"AI\"}<|call|>"
-    ),
-    ground_truth=(
-        "<|start|>assistant<|channel|>analysis<|message|>...<|end|>\n"
-        "<|start|>assistant to=functions.search<|channel|>commentary json<|message|>"
-        "{\"query\": \"AI\"}<|call|>"
-    ),
-    format_type="gpt_oss",  # Explicit GPT OSS format
-    enable_length_reward=True
-)
-
-# CodeV scoring - Verilog code generation (XML format, requires sandbox + iverilog)
-# Note: New JSON format (recommended). Legacy pickle bytes format is still supported for backward compatibility.
+# CodeV - Verilog code generation (requires sandbox + iverilog)
 score = compute_score(
     data_source="codev",
-    solution_str="<think>Creating a simple adder</think>\n<answer>```verilog\nmodule adder(input a, input b, output sum); assign sum = a + b; endmodule\n```</answer>",
+    solution_str="<think>Creating adder</think>\n<answer>```verilog\nmodule adder...\n```</answer>",
     ground_truth=json.dumps({
-        "code": "module adder_gold(input a, input b, output sum); assign sum = a + b; endmodule",
-        "input_port_width": [1, 1],  # Port widths as lists (JSON compatible)
+        "code": "module adder_gold...",
+        "input_port_width": [1, 1],
         "output_port_width": [1],
         "clock_port_polarity": [],
         "reset_port_polarity_sync": []
@@ -396,33 +233,13 @@ score = compute_score(
     sandbox_fusion_url="http://sandbox-server:5000",
     format_type="auto"
 )
-
-# CodeV scoring - GPT OSS format
-score = compute_score(
-    data_source="codev",
-    solution_str=(
-        "<|start|>assistant<|channel|>analysis<|message|>Creating a simple adder<|end|>\n"
-        "<|start|>assistant<|channel|>final<|message|>```verilog\n"
-        "module adder(input a, input b, output sum); assign sum = a + b; endmodule\n"
-        "```<|return|>"
-    ),
-    ground_truth=json.dumps({
-        "code": "module adder_gold(input a, input b, output sum); assign sum = a + b; endmodule",
-        "input_port_width": [1, 1],
-        "output_port_width": [1],
-        "clock_port_polarity": [],
-        "reset_port_polarity_sync": []
-    }),
-    sandbox_fusion_url="http://sandbox-server:5000",
-    format_type="gpt_oss"
-)
 ```
 
 **Supported Languages in Sandbox Fusion:**
-- Programming: python, cpp, java, go, rust, javascript (nodejs), typescript, kotlin, swift, scala
-- Scripting: bash, php, perl, ruby, lua, R
-- Testing: pytest, junit, jest, go_test
-- Other: csharp, sql, cuda, verilog, lean, racket, D_ut
+- **Programming**: python, cpp, java, go, rust, javascript (nodejs), typescript, kotlin, swift, scala
+- **Scripting**: bash, php, perl, ruby, lua, R
+- **Testing**: pytest, junit, jest, go_test
+- **Other**: csharp, sql, cuda, verilog, lean, racket, D_ut
 
 See `examples/verl_data_processing.py` for complete VERL data processing pipeline with multi-response generation and scoring.
 
@@ -514,23 +331,16 @@ ${logging_dir}/
 - **Related fields**: `text`, `inference_error`, `score_error`, and any custom string fields
 - See `examples/verl_data_processing.py` for implementation example with unified response objects
 
-## Common Patterns in Examples
+## Example Scripts
 
-All examples are in `examples/`:
-- `fineweb.py`: Full reproduction of FineWeb dataset (filtering + minhash dedup)
-- `process_common_crawl_dump.py`: CommonCrawl WARC processing pipeline
-- `minhash_deduplication.py`: Complete minhash deduplication workflow
-- `sentence_deduplication.py`: Sentence-level deduplication
-- `url_deduplication.py`: URL-based deduplication for web data
-- `exact_substrings.py`: Substring deduplication pipeline
-- `tokenize_c4.py`: Tokenization from HuggingFace datasets
-- `tokenize_from_hf_to_s3.py`: Tokenize HuggingFace datasets and save to S3
-- `summary_stats.py`: Collecting and merging statistics
-- `filter_hf_dataset.py`: Apply filters to HuggingFace datasets
-- `inference_example_chunked.py`: LLM inference with automatic checkpointing
-- `verl_data_processing.py`: Complete VERL data processing pipeline with multi-response generation and scoring
-- `preprocess_codecontests_plus.py`: Preprocess Code-Contests-Plus dataset for multi-language code generation
-- `convert_toolrl_to_gpt_oss.py`: Convert ToolRL dataset from XML to GPT OSS 120B format
+**Data Processing**: `fineweb.py`, `process_common_crawl_dump.py`, `filter_hf_dataset.py`
+**Deduplication**: `minhash_deduplication.py`, `sentence_deduplication.py`, `url_deduplication.py`, `exact_substrings.py`
+**Tokenization**: `tokenize_c4.py`, `tokenize_from_hf_to_s3.py`
+**LLM/VERL**: `inference_example_chunked.py`, `verl_data_processing.py`, `convert_toolrl_to_gpt_oss.py`
+**Preprocessing**: `preprocess_codecontests_plus.py`
+**Stats**: `summary_stats.py`
+
+All located in `examples/` directory.
 
 ## Notes for Development
 
