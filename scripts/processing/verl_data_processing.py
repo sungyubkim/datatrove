@@ -98,15 +98,252 @@ from datatrove.utils.reward_score import compute_score
 
 
 # ==============================================================================
-# Module-Level Configuration (Set from CLI Arguments)
+# Picklable Configuration Wrappers for Multiprocessing
 # ==============================================================================
-# These module-level variables are set by build_pipeline() from CLI arguments.
-# Using module globals instead of lambda closures ensures picklability for
-# multiprocessing (LocalPipelineExecutor with workers > 1).
-NUM_RESPONSES_PER_PROMPT = 10
-SAMPLING_TEMPERATURE = 0.7
-MAX_TOKENS_PER_RESPONSE = 2048
-SANDBOX_FUSION_URL = None
+# These callable classes capture configuration at creation time and are picklable,
+# solving the issue where global variables modified at runtime don't propagate
+# to worker processes in multiprocessing.
+
+
+class MultiResponseQueryBuilder:
+    """
+    Picklable query builder with captured configuration.
+
+    This class replaces the module-level global variable pattern with instance
+    attributes that are properly pickled and unpickled in worker processes.
+    """
+
+    def __init__(self, num_responses: int, temperature: float, max_tokens: int):
+        """
+        Initialize query builder with configuration.
+
+        Args:
+            num_responses: Number of responses to generate per prompt
+            temperature: Sampling temperature for diversity
+            max_tokens: Maximum tokens per response
+        """
+        self.num_responses = num_responses
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+
+    async def __call__(
+        self, runner: InferenceRunner, document: Document
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """
+        Generate multiple inference requests for a single document.
+
+        This async generator yields N inference requests for each document,
+        enabling the generation of multiple diverse responses per prompt.
+
+        Args:
+            runner: InferenceRunner instance
+            document: Input document with VERL data in metadata
+
+        Yields:
+            Inference request payloads (OpenAI chat completion format)
+        """
+        # Extract original prompt from metadata
+        original_prompt = document.metadata["original_prompt"]
+
+        # Generate N requests for diverse responses
+        for i in range(self.num_responses):
+            yield {
+                "messages": original_prompt,  # Chat messages in VERL format
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+                # Optional: add response index to track which response is which
+                "metadata": {"response_index": i},
+            }
+
+
+class PostprocessAndScore:
+    """
+    Picklable postprocess function with captured configuration.
+
+    This class replaces the module-level global variable pattern with instance
+    attributes that are properly pickled and unpickled in worker processes.
+    """
+
+    def __init__(self, sandbox_url: str | None):
+        """
+        Initialize postprocess function with configuration.
+
+        Args:
+            sandbox_url: Sandbox Fusion URL for code execution scoring
+        """
+        self.sandbox_url = sandbox_url
+
+    async def __call__(self, runner: InferenceRunner, document: Document) -> Document:
+        """
+        Post-process document after inference: score responses and compute statistics.
+
+        This async function enables parallel scoring of all responses within a document for
+        maximum throughput, especially beneficial for I/O-bound scoring (sandbox requests).
+
+        This function:
+        1. Retrieves all generated responses from inference_results
+        2. Scores ALL responses in PARALLEL against ground truth using VERL's compute_score
+           - Automatically selects appropriate scorer based on data_source
+           - Supports math (GSM8K, MATH), code execution, geometry, and QA datasets
+           - Uses asyncio.gather() for concurrent execution
+           - Uses runner.scoring_semaphore to prevent overwhelming external services
+        3. Creates unified response objects merging inference results + scores
+           - Each response contains: text, finish_reason, usage, inference_error, is_success,
+             score, score_error, reward_think, reward_fmt, reward_correct, reward_length
+           - Uses empty strings ("") instead of None for schema consistency (Parquet compatible)
+        4. Computes aggregate statistics (avg, max, success rate, etc.)
+        5. Stores unified_responses in document.metadata for checkpoints and output
+
+        Args:
+            runner: InferenceRunner instance (provides scoring_semaphore)
+            document: Document with inference results
+
+        Returns:
+            Updated document with unified_responses and scoring statistics
+        """
+        import asyncio
+
+        # Read existing responses from previous processing runs (for append behavior)
+        existing_responses = document.metadata.get("extra_info", {}).get("responses", [])
+
+        inference_results = document.metadata.get("inference_results", [])
+        # Reconstruct objects from checkpoint dictionaries
+        inference_results = [reconstruct_inference_result(r) for r in inference_results]
+        ground_truth = document.metadata["reward_model"].get("ground_truth", "")
+        data_source = document.metadata["data_source"]
+
+        # Handle different ground truth formats based on dataset type
+        # Ground truth is now always a JSON string (converted by input adapter)
+        # SearchR1 datasets expect dict format: {"target": [answers]}
+        if data_source.startswith("searchR1_") and isinstance(ground_truth, str):
+            ground_truth = {"target": [ground_truth]}
+
+        # Score all responses in parallel using asyncio.gather()
+        # Note: compute_score() now returns normalized scores with consistent schema automatically
+        async def score_single_response(result):
+            """Score a single response with semaphore rate limiting."""
+            if isinstance(result, InferenceSuccess):
+                try:
+                    # Use semaphore to limit concurrent scoring requests
+                    async with runner.scoring_semaphore:
+                        # Run synchronous compute_score in thread pool to avoid blocking event loop
+                        score_dict = await asyncio.to_thread(
+                            compute_score,
+                            data_source,
+                            result.text,
+                            ground_truth,
+                            sandbox_fusion_url=self.sandbox_url,
+                        )
+                    return score_dict
+                except Exception as e:
+                    # Handle scoring errors - return normalized error score
+                    return {
+                        "score": 0.0,
+                        "error": f"Scoring error: {str(e)}",
+                        "reward_think": 0.0,
+                        "reward_fmt": 0.0,
+                        "reward_correct": 0.0,
+                        "reward_length": 0.0,
+                    }
+            else:
+                # Failed inference gets zero score with normalized schema
+                error_msg = result.error if hasattr(result, "error") else "unknown"
+                return {
+                    "score": 0.0,
+                    "error": f"Inference error: {error_msg}",
+                    "reward_think": 0.0,
+                    "reward_fmt": 0.0,
+                    "reward_correct": 0.0,
+                    "reward_length": 0.0,
+                }
+
+        # Score all responses concurrently
+        scores = await asyncio.gather(*[
+            score_single_response(result)
+            for result in inference_results
+        ])
+
+        # Create unified response objects (merge inference results + scores)
+        # This unified structure is stored in checkpoints and used for output
+        unified_responses = []
+        for result, score in zip(inference_results, scores):
+            if isinstance(result, InferenceSuccess):
+                unified_responses.append(
+                    {
+                        # Response fields
+                        "text": result.text,
+                        "finish_reason": result.finish_reason,
+                        "usage": normalize_usage(result.usage),
+                        "inference_error": "",  # Empty string for success (schema consistent)
+                        "is_success": True,
+                        # Score fields
+                        "score": score.get("score", 0.0),
+                        "score_error": score.get("error", ""),
+                        "reward_think": score.get("reward_think", 0.0),
+                        "reward_fmt": score.get("reward_fmt", 0.0),
+                        "reward_correct": score.get("reward_correct", 0.0),
+                        "reward_length": score.get("reward_length", 0.0),
+                    }
+                )
+            else:
+                # Failed inference
+                error_msg = result.error if hasattr(result, "error") else "unknown"
+                unified_responses.append(
+                    {
+                        # Response fields (use empty strings for None to maintain schema)
+                        "text": "",  # Empty string instead of None (schema consistent)
+                        "finish_reason": "error",
+                        "usage": normalize_usage(None),
+                        "inference_error": error_msg,  # Inference error message
+                        "is_success": False,
+                        # Score fields (0.0 for failed inference)
+                        "score": score.get("score", 0.0),
+                        "score_error": score.get("error", ""),
+                        "reward_think": score.get("reward_think", 0.0),
+                        "reward_fmt": score.get("reward_fmt", 0.0),
+                        "reward_correct": score.get("reward_correct", 0.0),
+                        "reward_length": score.get("reward_length", 0.0),
+                    }
+                )
+
+        # Merge existing responses (from previous runs) with new responses (append behavior)
+        # This allows incremental response generation: run 1 generates 10, run 2 adds 10 more = 20 total
+        all_responses = existing_responses + unified_responses
+
+        # Compute aggregate statistics from ALL responses (existing + new)
+        if all_responses:
+            valid_scores = [r["score"] for r in all_responses]
+            # Store ALL responses (used by both checkpoints and output adapter)
+            document.metadata["unified_responses"] = all_responses
+            # Remove inference_results to prevent checkpoint duplication
+            # (unified_responses contains all the same data + scores)
+            document.metadata.pop("inference_results", None)
+            # Recalculate statistics from ALL responses (not just new ones)
+            document.metadata["avg_score"] = sum(valid_scores) / len(valid_scores)
+            document.metadata["max_score"] = max(valid_scores)
+            document.metadata["min_score"] = min(valid_scores)
+            document.metadata["num_correct"] = sum(
+                int(r["score"] > 0) for r in all_responses
+            )
+            document.metadata["success_rate"] = document.metadata["num_correct"] / len(
+                all_responses
+            )
+            document.metadata["num_responses"] = len(all_responses)
+            document.metadata["num_failed"] = sum(
+                1 for r in all_responses if r["score_error"]
+            )
+        else:
+            # No responses generated
+            document.metadata["unified_responses"] = []
+            document.metadata["avg_score"] = 0.0
+            document.metadata["max_score"] = 0.0
+            document.metadata["min_score"] = 0.0
+            document.metadata["num_correct"] = 0
+            document.metadata["success_rate"] = 0.0
+            document.metadata["num_responses"] = 0
+            document.metadata["num_failed"] = 0
+
+        return document
 
 
 # ==============================================================================
@@ -228,45 +465,7 @@ def verl_to_document_adapter(
 
 
 # ==============================================================================
-# 2. Multi-Response Query Builder - Generate N responses per prompt
-# ==============================================================================
-async def multi_response_query_builder(
-    runner: InferenceRunner, document: Document
-) -> AsyncGenerator[dict[str, Any], None]:
-    """
-    Generate multiple inference requests for a single document.
-
-    This async generator yields N inference requests for each document,
-    enabling the generation of multiple diverse responses per prompt.
-
-    Configuration is read from module-level globals (set by build_pipeline):
-        - NUM_RESPONSES_PER_PROMPT: Number of responses to generate
-        - SAMPLING_TEMPERATURE: Sampling temperature
-        - MAX_TOKENS_PER_RESPONSE: Maximum tokens per response
-
-    Args:
-        runner: InferenceRunner instance
-        document: Input document with VERL data in metadata
-
-    Yields:
-        Inference request payloads (OpenAI chat completion format)
-    """
-    # Extract original prompt from metadata
-    original_prompt = document.metadata["original_prompt"]
-
-    # Generate N requests for diverse responses (using module-level config)
-    for i in range(NUM_RESPONSES_PER_PROMPT):
-        yield {
-            "messages": original_prompt,  # Chat messages in VERL format
-            "max_tokens": MAX_TOKENS_PER_RESPONSE,
-            "temperature": SAMPLING_TEMPERATURE,
-            # Optional: add response index to track which response is which
-            "metadata": {"response_index": i},
-        }
-
-
-# ==============================================================================
-# 3. Usage Normalization Helper
+# 2. Usage Normalization Helper
 # ==============================================================================
 def normalize_usage(usage: dict | None) -> dict:
     """
@@ -341,186 +540,7 @@ def reconstruct_inference_result(
 
 
 # ==============================================================================
-# 4. Post-Processing and Scoring Function
-# ==============================================================================
-async def postprocess_and_score(runner: InferenceRunner, document: Document) -> Document:
-    """
-    Post-process document after inference: score responses and compute statistics.
-
-    This async function enables parallel scoring of all responses within a document for
-    maximum throughput, especially beneficial for I/O-bound scoring (sandbox requests).
-
-    This function:
-    1. Retrieves all generated responses from inference_results
-    2. Scores ALL responses in PARALLEL against ground truth using VERL's compute_score
-       - Automatically selects appropriate scorer based on data_source
-       - Supports math (GSM8K, MATH), code execution, geometry, and QA datasets
-       - Uses asyncio.gather() for concurrent execution
-       - Uses runner.scoring_semaphore to prevent overwhelming external services
-    3. Creates unified response objects merging inference results + scores
-       - Each response contains: text, finish_reason, usage, inference_error, is_success,
-         score, score_error, reward_think, reward_fmt, reward_correct, reward_length
-       - Uses empty strings ("") instead of None for schema consistency (Parquet compatible)
-    4. Computes aggregate statistics (avg, max, success rate, etc.)
-    5. Stores unified_responses in document.metadata for checkpoints and output
-
-    Configuration is read from module-level global:
-        - SANDBOX_FUSION_URL: Sandbox Fusion URL for code execution scoring
-
-    Args:
-        runner: InferenceRunner instance (provides scoring_semaphore)
-        document: Document with inference results
-
-    Returns:
-        Updated document with unified_responses and scoring statistics
-    """
-    import asyncio
-
-    # Read existing responses from previous processing runs (for append behavior)
-    existing_responses = document.metadata.get("extra_info", {}).get("responses", [])
-
-    inference_results = document.metadata.get("inference_results", [])
-    # Reconstruct objects from checkpoint dictionaries
-    inference_results = [reconstruct_inference_result(r) for r in inference_results]
-    ground_truth = document.metadata["reward_model"].get("ground_truth", "")
-    data_source = document.metadata["data_source"]
-
-    # Handle different ground truth formats based on dataset type
-    # Ground truth is now always a JSON string (converted by input adapter)
-    # SearchR1 datasets expect dict format: {"target": [answers]}
-    if data_source.startswith("searchR1_") and isinstance(ground_truth, str):
-        ground_truth = {"target": [ground_truth]}
-
-    # Score all responses in parallel using asyncio.gather()
-    # Note: compute_score() now returns normalized scores with consistent schema automatically
-    async def score_single_response(result):
-        """Score a single response with semaphore rate limiting."""
-        if isinstance(result, InferenceSuccess):
-            try:
-                # Use semaphore to limit concurrent scoring requests
-                async with runner.scoring_semaphore:
-                    # Run synchronous compute_score in thread pool to avoid blocking event loop
-                    score_dict = await asyncio.to_thread(
-                        compute_score,
-                        data_source,
-                        result.text,
-                        ground_truth,
-                        sandbox_fusion_url=SANDBOX_FUSION_URL,
-                    )
-                return score_dict
-            except Exception as e:
-                # Handle scoring errors - return normalized error score
-                return {
-                    "score": 0.0,
-                    "error": f"Scoring error: {str(e)}",
-                    "reward_think": 0.0,
-                    "reward_fmt": 0.0,
-                    "reward_correct": 0.0,
-                    "reward_length": 0.0,
-                }
-        else:
-            # Failed inference gets zero score with normalized schema
-            error_msg = result.error if hasattr(result, "error") else "unknown"
-            return {
-                "score": 0.0,
-                "error": f"Inference error: {error_msg}",
-                "reward_think": 0.0,
-                "reward_fmt": 0.0,
-                "reward_correct": 0.0,
-                "reward_length": 0.0,
-            }
-
-    # Score all responses concurrently
-    scores = await asyncio.gather(*[
-        score_single_response(result)
-        for result in inference_results
-    ])
-
-    # Create unified response objects (merge inference results + scores)
-    # This unified structure is stored in checkpoints and used for output
-    unified_responses = []
-    for result, score in zip(inference_results, scores):
-        if isinstance(result, InferenceSuccess):
-            unified_responses.append(
-                {
-                    # Response fields
-                    "text": result.text,
-                    "finish_reason": result.finish_reason,
-                    "usage": normalize_usage(result.usage),
-                    "inference_error": "",  # Empty string for success (schema consistent)
-                    "is_success": True,
-                    # Score fields
-                    "score": score.get("score", 0.0),
-                    "score_error": score.get("error", ""),
-                    "reward_think": score.get("reward_think", 0.0),
-                    "reward_fmt": score.get("reward_fmt", 0.0),
-                    "reward_correct": score.get("reward_correct", 0.0),
-                    "reward_length": score.get("reward_length", 0.0),
-                }
-            )
-        else:
-            # Failed inference
-            error_msg = result.error if hasattr(result, "error") else "unknown"
-            unified_responses.append(
-                {
-                    # Response fields (use empty strings for None to maintain schema)
-                    "text": "",  # Empty string instead of None (schema consistent)
-                    "finish_reason": "error",
-                    "usage": normalize_usage(None),
-                    "inference_error": error_msg,  # Inference error message
-                    "is_success": False,
-                    # Score fields (0.0 for failed inference)
-                    "score": score.get("score", 0.0),
-                    "score_error": score.get("error", ""),
-                    "reward_think": score.get("reward_think", 0.0),
-                    "reward_fmt": score.get("reward_fmt", 0.0),
-                    "reward_correct": score.get("reward_correct", 0.0),
-                    "reward_length": score.get("reward_length", 0.0),
-                }
-            )
-
-    # Merge existing responses (from previous runs) with new responses (append behavior)
-    # This allows incremental response generation: run 1 generates 10, run 2 adds 10 more = 20 total
-    all_responses = existing_responses + unified_responses
-
-    # Compute aggregate statistics from ALL responses (existing + new)
-    if all_responses:
-        valid_scores = [r["score"] for r in all_responses]
-        # Store ALL responses (used by both checkpoints and output adapter)
-        document.metadata["unified_responses"] = all_responses
-        # Remove inference_results to prevent checkpoint duplication
-        # (unified_responses contains all the same data + scores)
-        document.metadata.pop("inference_results", None)
-        # Recalculate statistics from ALL responses (not just new ones)
-        document.metadata["avg_score"] = sum(valid_scores) / len(valid_scores)
-        document.metadata["max_score"] = max(valid_scores)
-        document.metadata["min_score"] = min(valid_scores)
-        document.metadata["num_correct"] = sum(
-            int(r["score"] > 0) for r in all_responses
-        )
-        document.metadata["success_rate"] = document.metadata["num_correct"] / len(
-            all_responses
-        )
-        document.metadata["num_responses"] = len(all_responses)
-        document.metadata["num_failed"] = sum(
-            1 for r in all_responses if r["score_error"]
-        )
-    else:
-        # No responses generated
-        document.metadata["unified_responses"] = []
-        document.metadata["avg_score"] = 0.0
-        document.metadata["max_score"] = 0.0
-        document.metadata["min_score"] = 0.0
-        document.metadata["num_correct"] = 0
-        document.metadata["success_rate"] = 0.0
-        document.metadata["num_responses"] = 0
-        document.metadata["num_failed"] = 0
-
-    return document
-
-
-# ==============================================================================
-# 5. Output Adapter - Convert Document back to VERL format + results
+# 3. Output Adapter - Convert Document back to VERL format + results
 # ==============================================================================
 def document_to_verl_adapter(self, document: Document) -> dict:
     """
@@ -663,13 +683,18 @@ def build_pipeline(args):
     Returns:
         List of pipeline steps
     """
-    # Set module-level configuration from CLI arguments
-    # This ensures pickability for multiprocessing (avoids lambda closure issues)
-    global NUM_RESPONSES_PER_PROMPT, SAMPLING_TEMPERATURE, MAX_TOKENS_PER_RESPONSE, SANDBOX_FUSION_URL
-    NUM_RESPONSES_PER_PROMPT = args.num_responses_per_prompt
-    SAMPLING_TEMPERATURE = args.sampling_temperature
-    MAX_TOKENS_PER_RESPONSE = args.max_tokens_per_response
-    SANDBOX_FUSION_URL = args.sandbox_fusion_url
+    # Create picklable callable instances with configuration from CLI arguments
+    # These instances capture configuration at creation time and are properly
+    # pickled/unpickled in worker processes (unlike module-level globals)
+    query_builder = MultiResponseQueryBuilder(
+        num_responses=args.num_responses_per_prompt,
+        temperature=args.sampling_temperature,
+        max_tokens=args.max_tokens_per_response,
+    )
+
+    postprocess_fn = PostprocessAndScore(
+        sandbox_url=args.sandbox_fusion_url,
+    )
 
     pipeline = [
         # Step 1: Read VERL parquet data
@@ -682,7 +707,7 @@ def build_pipeline(args):
         ),
         # Step 2: Generate multiple responses and score them
         InferenceRunner(
-            query_builder=multi_response_query_builder,  # Direct reference (no lambda)
+            query_builder=query_builder,  # Picklable callable instance
             config=InferenceConfig(
                 server_type=args.inference_server_type,
                 model_name_or_path=args.model_name_or_path,
@@ -701,7 +726,7 @@ def build_pipeline(args):
             ),
             checkpoints_local_dir=args.checkpoint_dir,
             records_per_chunk=args.checkpoint_frequency,
-            postprocess_fn=postprocess_and_score,  # Direct reference (no lambda)
+            postprocess_fn=postprocess_fn,  # Picklable callable instance
             skip_bad_requests=not args.stop_on_bad_request,
             max_concurrent_scoring=args.max_concurrent_scoring,
         ),
