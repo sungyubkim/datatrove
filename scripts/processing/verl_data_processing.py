@@ -346,6 +346,35 @@ class PostprocessAndScore:
         return document
 
 
+class ResponseScoreStats(BaseStats):
+    """
+    Collect statistics on response scores and success rates.
+
+    This class is defined at module level (not inside build_pipeline) to ensure
+    it can be properly pickled for multiprocessing. Local classes defined inside
+    functions cannot be pickled by Python's pickle module.
+    """
+
+    def extract_stats(self, doc: Document):
+        """
+        Extract response score statistics from a document.
+
+        Args:
+            doc: Document with response score metadata
+
+        Returns:
+            Dict mapping statistic names to values
+        """
+        avg_score = doc.metadata.get("avg_score", 0.0)
+        success_rate = doc.metadata.get("success_rate", 0.0)
+        num_responses = doc.metadata.get("num_responses", 0)
+        return {
+            "avg_score": avg_score,
+            "success_rate": success_rate,
+            "num_responses": num_responses,
+        }
+
+
 # ==============================================================================
 # PyArrow Schema Definition for VERL Format
 # ==============================================================================
@@ -734,19 +763,6 @@ def build_pipeline(args):
 
     # Optional: Add statistics collection if requested
     if args.stats_output_dir:
-        class ResponseScoreStats(BaseStats):
-            """Collect statistics on response scores and success rates."""
-
-            def extract_stats(self, doc: Document):
-                avg_score = doc.metadata.get("avg_score", 0.0)
-                success_rate = doc.metadata.get("success_rate", 0.0)
-                num_responses = doc.metadata.get("num_responses", 0)
-                return [
-                    ("avg_score", avg_score, "float"),
-                    ("success_rate", success_rate, "float"),
-                    ("num_responses", num_responses, "int"),
-                ]
-
         pipeline.append(
             ResponseScoreStats(
                 output_folder=args.stats_output_dir,
