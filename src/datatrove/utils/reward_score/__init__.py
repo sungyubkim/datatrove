@@ -46,8 +46,23 @@ def normalize_score(raw_result, error=None) -> NormalizedScore:
     if isinstance(raw_result, dict):
         base = raw_result.copy()
     elif isinstance(raw_result, tuple):
-        # Sandbox fusion returns (score, metadata)
-        base = {"score": float(raw_result[0])}
+        # Sandbox fusion returns (score, metadata_list)
+        score_value = float(raw_result[0])
+        metadata_list = raw_result[1] if len(raw_result) > 1 else []
+
+        base = {"score": score_value}
+
+        # Extract error messages from metadata_list
+        if isinstance(metadata_list, list) and metadata_list:
+            errors = []
+            for item in metadata_list:
+                if isinstance(item, dict):
+                    if "error" in item and item["error"]:
+                        errors.append(str(item["error"]))
+
+            # Combine all errors into error field
+            if errors:
+                base["error"] = "; ".join(errors)
     elif isinstance(raw_result, (int, float, bool)):
         base = {"score": float(raw_result)}
     else:

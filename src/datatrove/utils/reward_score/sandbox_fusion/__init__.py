@@ -183,5 +183,20 @@ def compute_score(
         # Try to return partial metadata if available, otherwise return error info
         final_metadata = metadata_list if "metadata_list" in locals() else [{"error": f"Unhandled exception: {e}"}]
 
-    # Ensure float and list are returned
-    return float(score), final_metadata if isinstance(final_metadata, list) else [final_metadata]
+    # Return dict instead of tuple for consistency with other scorers
+    error_msg = ""
+    if isinstance(final_metadata, list) and final_metadata:
+        # Extract first error message from metadata
+        for m in final_metadata:
+            if isinstance(m, dict) and "error" in m and m["error"]:
+                error_msg = str(m["error"])
+                break
+
+    return {
+        "score": float(score),
+        "error": error_msg,
+        "reward_think": 0.0,
+        "reward_fmt": 0.0,
+        "reward_correct": 0.0,
+        "reward_length": 0.0,
+    }
