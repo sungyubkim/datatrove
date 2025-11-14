@@ -737,7 +737,7 @@ def build_pipeline(args):
                 model_name_or_path=args.model_name_or_path,
                 temperature=args.sampling_temperature,
                 max_concurrent_requests=args.max_concurrent_inference,
-                max_concurrent_tasks=200,  # Higher if query_builder is slow
+                max_concurrent_tasks=100,  # Reduced to prevent thread pool exhaustion and deadlock
                 metric_interval=120,  # Report metrics every 2 minutes
                 external_endpoint=args.remote_vllm_endpoint if args.inference_server_type == "vllm-remote" else None,
             ),

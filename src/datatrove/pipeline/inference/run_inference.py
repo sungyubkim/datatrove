@@ -331,8 +331,9 @@ class CheckpointManager:
                     filename = output_writer_context._get_output_filename(
                         document, rank, chunk_index=chunk_index
                     )
-                    # Use asyncio.to_thread to avoid blocking event loop with I/O
-                    await asyncio.to_thread(output_writer_context.close_file, filename)
+                    # Call close_file synchronously to ensure write→close ordering
+                    # ParquetWriter.close_file() is thread-safe with its own lock
+                    output_writer_context.close_file(filename)
                     self.new_completed_chunks.add(chunk_index)
                     should_update_last_chunk_index = True
         # can not be within the chunk lock

@@ -1,8 +1,10 @@
 from collections import Counter, defaultdict
+import threading
 from typing import IO, Any, Callable, Literal
 
 from datatrove.io import DataFolderLike
 from datatrove.pipeline.writers.disk_base import DiskWriter
+from datatrove.utils.logging import logger
 
 
 class ParquetWriter(DiskWriter):
@@ -42,6 +44,8 @@ class ParquetWriter(DiskWriter):
         self.compression = compression
         self.batch_size = batch_size
         self.schema = schema
+        # Thread lock to protect _batches and _writers from concurrent access
+        self._write_lock = threading.Lock()
 
     def _on_file_switch(self, original_name, old_filename, new_filename):
         """
@@ -52,8 +56,9 @@ class ParquetWriter(DiskWriter):
             old_filename: old full filename
             new_filename: new full filename
         """
-        self._writers.pop(original_name).close()
-        super()._on_file_switch(original_name, old_filename, new_filename)
+        with self._write_lock:
+            self._writers.pop(original_name).close()
+            super()._on_file_switch(original_name, old_filename, new_filename)
 
     def close_file(self, original_name: str):
         """
@@ -67,16 +72,26 @@ class ParquetWriter(DiskWriter):
         Args:
             original_name: Logical filename from _get_output_filename()
         """
-        # 1. Flush any remaining batch data for this file
-        if original_name in self._batches:
-            self._write_batch(original_name)
+        # Use lock to ensure thread-safe access to _batches and _writers
+        with self._write_lock:
+            try:
+                # 1. Flush any remaining batch data for this file
+                if original_name in self._batches:
+                    batch_size = len(self._batches[original_name])
+                    if batch_size > 0:
+                        logger.info(f"Flushing {batch_size} remaining documents to {original_name}")
+                        self._write_batch(original_name)
 
-        # 2. Close PyArrow ParquetWriter (writes footer/metadata)
-        if original_name in self._writers:
-            self._writers.pop(original_name).close()
+                # 2. Close PyArrow ParquetWriter (writes footer/metadata)
+                if original_name in self._writers:
+                    self._writers.pop(original_name).close()
+                    logger.info(f"Successfully closed Parquet file: {original_name}")
 
-        # 3. Close file handler (handles 000_ prefix via parent class)
-        super().close_file(original_name)
+                # 3. Close file handler (handles 000_ prefix via parent class)
+                super().close_file(original_name)
+            except Exception as e:
+                logger.error(f"Error closing file {original_name}: {e}", exc_info=True)
+                raise
 
     def _write_batch(self, filename):
         if not self._batches[filename]:
@@ -92,21 +107,24 @@ class ParquetWriter(DiskWriter):
         import pyarrow as pa
         import pyarrow.parquet as pq
 
-        if filename not in self._writers:
-            self._writers[filename] = pq.ParquetWriter(
-                file_handler,
-                schema=self.schema if self.schema is not None else pa.RecordBatch.from_pylist([document]).schema,
-                compression=self.compression,
-            )
-        self._batches[filename].append(document)
-        if len(self._batches[filename]) == self.batch_size:
-            self._write_batch(filename)
+        # Use lock to ensure thread-safe access to _batches and _writers
+        with self._write_lock:
+            if filename not in self._writers:
+                self._writers[filename] = pq.ParquetWriter(
+                    file_handler,
+                    schema=self.schema if self.schema is not None else pa.RecordBatch.from_pylist([document]).schema,
+                    compression=self.compression,
+                )
+            self._batches[filename].append(document)
+            if len(self._batches[filename]) == self.batch_size:
+                self._write_batch(filename)
 
     def close(self):
-        for filename in list(self._batches.keys()):
-            self._write_batch(filename)
-        for writer in self._writers.values():
-            writer.close()
-        self._batches.clear()
-        self._writers.clear()
-        super().close()
+        with self._write_lock:
+            for filename in list(self._batches.keys()):
+                self._write_batch(filename)
+            for writer in self._writers.values():
+                writer.close()
+            self._batches.clear()
+            self._writers.clear()
+            super().close()
