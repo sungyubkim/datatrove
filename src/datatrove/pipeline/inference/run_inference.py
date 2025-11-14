@@ -418,23 +418,22 @@ class CheckpointManager:
             # find existing chunk files and read from them
             for filename in self.checkpoints_local_dir_df.glob(f"{rank:05d}/*.jsonl"):
                 chunk_index = int(filename.removeprefix(f"{rank:05d}/chunk_").removesuffix(".jsonl"))
-                # not strictly needed but just to be safe for the future
-                async with self.file_locks[chunk_index]:
-                    for document in reader.read_file(filename):
-                        if "postprocess_remove" not in document.metadata:
-                            output_writer_context.write(document, rank=rank, chunk_index=chunk_index)
-                        all_ids.add(document.id)
-                        self.per_chunk_counts[chunk_index] += 1
-                        if self.per_chunk_counts[chunk_index] == self.records_per_chunk:
-                            # close the file
-                            filename = output_writer_context._get_output_filename(
-                                document, rank, chunk_index=chunk_index
-                            )
-                            # Use asyncio.to_thread to avoid blocking event loop with I/O
-                            await asyncio.to_thread(output_writer_context.close_file, filename)
-                            self.new_completed_chunks.add(chunk_index)
-                            # update the last chunk index/delete local file etc
-                            should_update_last_chunk_index = True
+                # Queue-based approach: No per-chunk locks needed (single writer task)
+                for document in reader.read_file(filename):
+                    if "postprocess_remove" not in document.metadata:
+                        output_writer_context.write(document, rank=rank, chunk_index=chunk_index)
+                    all_ids.add(document.id)
+                    self.per_chunk_counts[chunk_index] += 1
+                    if self.per_chunk_counts[chunk_index] == self.records_per_chunk:
+                        # close the file
+                        filename = output_writer_context._get_output_filename(
+                            document, rank, chunk_index=chunk_index
+                        )
+                        # Use asyncio.to_thread to avoid blocking event loop with I/O
+                        await asyncio.to_thread(output_writer_context.close_file, filename)
+                        self.new_completed_chunks.add(chunk_index)
+                        # update the last chunk index/delete local file etc
+                        should_update_last_chunk_index = True
         # can not be within the checkpoint_file_lock - call outside to avoid deadlock
         if should_update_last_chunk_index:
             await self.update_last_chunk_index(rank)
@@ -476,16 +475,14 @@ class CheckpointManager:
             # possibly multiple ones, in case file +2 finished before +1
             while self.last_chunk_index + 1 in self.new_completed_chunks:
                 self.last_chunk_index += 1
-                async with self.file_locks[self.last_chunk_index]:
-                    chunk_file = os.path.join(
-                        self.checkpoints_local_dir, f"{rank:05d}/chunk_{self.last_chunk_index:05d}.jsonl"
-                    )
-                    # Use asyncio.to_thread to avoid blocking event loop with I/O
-                    await asyncio.to_thread(remove_chunk_file, chunk_file)
+                chunk_file = os.path.join(
+                    self.checkpoints_local_dir, f"{rank:05d}/chunk_{self.last_chunk_index:05d}.jsonl"
+                )
+                # Use asyncio.to_thread to avoid blocking event loop with I/O
+                await asyncio.to_thread(remove_chunk_file, chunk_file)
                 logger.info(f"Finished chunk {self.last_chunk_index}")
-                # clean up
-                self.file_locks.pop(self.last_chunk_index)
-                self.per_chunk_counts.pop(self.last_chunk_index)
+                # clean up - use pop with default to avoid KeyError if chunk wasn't tracked
+                self.per_chunk_counts.pop(self.last_chunk_index, None)
                 self.new_completed_chunks.remove(self.last_chunk_index)
                 # save new last chunk index
                 # Use asyncio.to_thread to avoid blocking event loop with I/O
@@ -926,6 +923,7 @@ class InferenceRunner(PipelineStep):
 
             # process remaining documents
             record_idx = -1
+            chunk_index = -1  # Initialize to handle empty input (no documents processed)
             chunk_index_gen = self.checkpoint_manager.chunk_index_gen()
             async for record in self._async_data_gen(data_gen):
                 record_idx += 1
@@ -958,8 +956,9 @@ class InferenceRunner(PipelineStep):
             # Stop checkpoint writer and wait for queue to drain
             await self.checkpoint_manager.stop_writer()
 
-            # Cleanup after writer stopped
-            await self.checkpoint_manager.cleanup_last_chunk(rank, chunk_index)
+            # Cleanup after writer stopped - only if we processed documents
+            if record_idx >= 0:  # Guard against empty input (no documents processed)
+                await self.checkpoint_manager.cleanup_last_chunk(rank, chunk_index)
 
             # 4. Close any incomplete chunks before context exit
             # This ensures Parquet files are finalized even if records_per_chunk wasn't reached
