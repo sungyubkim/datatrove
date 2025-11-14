@@ -274,9 +274,13 @@ class InferenceConfig:
 class CheckpointManager:
     def __init__(self, checkpoints_local_dir: str | None = None, records_per_chunk: int = 6000):
         """
-        Manages checkpointing and chunking of documents.
+        Manages checkpointing and chunking of documents using a Queue-based approach.
+
         If checkpoints_local_dir is provided, it will save documents to it in chunks of records_per_chunk documents.
         If it's not provided, it will only write to the main output writer.
+
+        The Queue-based approach eliminates race conditions by having a single writer task
+        that processes all writes sequentially.
         """
         self.checkpoints_local_dir = checkpoints_local_dir if checkpoints_local_dir is not None else None
         self.checkpoints_local_dir_df = (
@@ -288,57 +292,110 @@ class CheckpointManager:
             raise ValueError("records_per_chunk must be positive")
         self.records_per_chunk = records_per_chunk
 
-        self.file_locks = defaultdict(asyncio.Lock)
+        # Queue-based approach (no locks needed!)
+        self.write_queue: asyncio.Queue | None = None
+        self.writer_task: asyncio.Task | None = None
+
         self.checkpoint_file_lock = asyncio.Lock()
         self.per_chunk_counts = Counter()
         self.new_completed_chunks = set()
         self.last_chunk_index = -1
 
-    async def write_document(self, document: Document, rank: int, chunk_index: int, output_writer_context: DiskWriter):
+    async def start_writer(self, queue_size: int = 10000):
+        """Start the checkpoint writer task."""
+        if self.write_queue is not None:
+            logger.warning("Writer task already started")
+            return
+
+        self.write_queue = asyncio.Queue(maxsize=queue_size)
+        self.writer_task = asyncio.create_task(self.checkpoint_writer_task())
+        logger.info("Checkpoint writer task started")
+
+    async def stop_writer(self):
+        """Stop the checkpoint writer task gracefully."""
+        if self.write_queue is None:
+            return
+
+        # Send shutdown signal
+        await self.write_queue.put(None)
+        # Wait for queue to drain
+        await self.write_queue.join()
+        # Wait for writer task to finish
+        if self.writer_task is not None:
+            await self.writer_task
+        logger.info("Checkpoint writer task stopped")
+
+    async def checkpoint_writer_task(self):
         """
-        Write a document to the checkpoint and main output writer. Potentially closes the main file if the chunk is complete.
+        Single writer task - processes all checkpoint writes sequentially.
+
+        This eliminates race conditions by design. Only one task writes to files,
+        so there's no concurrent access to shared state.
         """
-        import aiofiles
         import orjson
 
-        def ensure_dir_exists(save_dir: str):
-            """Helper to create directory if it doesn't exist"""
-            if not os.path.exists(save_dir):
-                os.makedirs(save_dir, exist_ok=True)
+        while True:
+            item = await self.write_queue.get()
 
-        should_update_last_chunk_index = False
-        async with self.file_locks[chunk_index]:
-            # write to main output writer
-            if "postprocess_remove" not in document.metadata:
-                output_writer_context.write(document, rank=rank, chunk_index=chunk_index)
-            self.per_chunk_counts[chunk_index] += 1
+            if item is None:  # Shutdown signal
+                self.write_queue.task_done()
+                break
 
-            if self.checkpoints_local_dir is not None:
-                # save to checkpoint/chunk
-                save_path = os.path.join(self.checkpoints_local_dir, f"{rank:05d}/chunk_{chunk_index:05d}.jsonl")
-                save_dir = os.path.dirname(save_path)
-                # Use asyncio.to_thread to avoid blocking event loop with I/O
-                await asyncio.to_thread(ensure_dir_exists, save_dir)
-                # Check file existence in thread-safe way before logging
-                file_exists = await asyncio.to_thread(os.path.exists, save_path)
-                if not file_exists:
-                    logger.info(f"Creating checkpoint file {save_path}")
-                async with aiofiles.open(save_path, "ab") as f:
-                    await f.write(orjson.dumps(dataclasses.asdict(document), option=orjson.OPT_APPEND_NEWLINE))
-                # see if we have to close the file
+            try:
+                document, rank, chunk_index, output_writer_context = item
+
+                # Write to main output writer (ParquetWriter has its own lock)
+                if "postprocess_remove" not in document.metadata:
+                    output_writer_context.write(document, rank=rank, chunk_index=chunk_index)
+
+                self.per_chunk_counts[chunk_index] += 1
+
+                # Write to checkpoint JSONL
+                if self.checkpoints_local_dir is not None:
+                    save_path = os.path.join(
+                        self.checkpoints_local_dir,
+                        f"{rank:05d}/chunk_{chunk_index:05d}.jsonl"
+                    )
+                    save_dir = os.path.dirname(save_path)
+
+                    if not os.path.exists(save_dir):
+                        os.makedirs(save_dir, exist_ok=True)
+
+                    file_exists = os.path.exists(save_path)
+                    if not file_exists:
+                        logger.info(f"Creating checkpoint file {save_path}")
+
+                    # Synchronous file write (no aiofiles, no race)
+                    with open(save_path, "ab") as f:
+                        f.write(orjson.dumps(dataclasses.asdict(document), option=orjson.OPT_APPEND_NEWLINE))
+                        f.flush()
+                        os.fsync(f.fileno())  # Force to disk
+
+                # Check if chunk complete
                 if self.per_chunk_counts[chunk_index] == self.records_per_chunk:
-                    # we gotta close the main file
                     filename = output_writer_context._get_output_filename(
                         document, rank, chunk_index=chunk_index
                     )
-                    # Call close_file synchronously to ensure write→close ordering
-                    # ParquetWriter.close_file() is thread-safe with its own lock
                     output_writer_context.close_file(filename)
                     self.new_completed_chunks.add(chunk_index)
-                    should_update_last_chunk_index = True
-        # can not be within the chunk lock
-        if should_update_last_chunk_index:
-            await self.update_last_chunk_index(rank)
+                    # Update last chunk index will be called separately
+
+            except Exception as e:
+                logger.error(f"Error in checkpoint writer: {e}", exc_info=True)
+            finally:
+                self.write_queue.task_done()
+
+    async def write_document(self, document: Document, rank: int, chunk_index: int, output_writer_context: DiskWriter):
+        """
+        Queue-based write - just enqueue, no locks needed.
+
+        The single writer task processes all writes sequentially, eliminating race conditions.
+        """
+        if self.write_queue is None:
+            raise RuntimeError("CheckpointManager not started. Call start_writer() first.")
+
+        # Simply enqueue - writer task handles everything
+        await self.write_queue.put((document, rank, chunk_index, output_writer_context))
 
     async def parse_existing_checkpoints(self, rank: int, output_writer_context: DiskWriter) -> tuple[int, set[str]]:
         """
