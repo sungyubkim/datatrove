@@ -992,6 +992,17 @@ For details: examples/verl_data_processing.py
     if args.stats_output_dir:
         Path(args.stats_output_dir).mkdir(parents=True, exist_ok=True)
 
+    # Configure ThreadPoolExecutor for asyncio.to_thread()
+    # Increase from default (~32) to 2000 to prevent deadlock when
+    # max_concurrent_tasks × responses_per_prompt > default thread pool size
+    import asyncio
+    import concurrent.futures
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=2000)
+    loop.set_default_executor(executor)
+
     # Build and run pipeline
     print(f"Building pipeline with configuration:")
     print(f"  Input: {args.input_data}")
@@ -1000,6 +1011,7 @@ For details: examples/verl_data_processing.py
     print(f"  Responses per prompt: {args.num_responses_per_prompt}")
     print(f"  Temperature: {args.sampling_temperature}")
     print(f"  Parallel tasks: {args.num_parallel_tasks}")
+    print(f"  ThreadPool size: 2000")
     print(f"  Checkpoint frequency: {args.checkpoint_frequency}")
     print()
 
