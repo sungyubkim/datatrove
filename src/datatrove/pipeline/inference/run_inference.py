@@ -819,6 +819,9 @@ class InferenceRunner(PipelineStep):
         await self.server.wait_until_ready()
         logger.info(f"Inference server up on port {self.server.port}")
 
+        # Start checkpoint writer task
+        await self.checkpoint_manager.start_writer()
+
         # Start metrics reporting
         self.metrics.reset()
         metrics_task = asyncio.create_task(self.metrics_reporter(interval=self.config.metric_interval))
@@ -951,10 +954,16 @@ class InferenceRunner(PipelineStep):
             # 3. Wait for all remaining tasks to complete
             if tasks_pool:
                 await asyncio.gather(*tasks_pool)
-                await self.checkpoint_manager.cleanup_last_chunk(rank, chunk_index)
+
+            # Stop checkpoint writer and wait for queue to drain
+            await self.checkpoint_manager.stop_writer()
+
+            # Cleanup after writer stopped
+            await self.checkpoint_manager.cleanup_last_chunk(rank, chunk_index)
 
             # 4. Close any incomplete chunks before context exit
             # This ensures Parquet files are finalized even if records_per_chunk wasn't reached
+            # Queue writer is stopped, safe to call close_file directly
             for chunk_idx, count in self.checkpoint_manager.per_chunk_counts.items():
                 if count > 0 and count < self.checkpoint_manager.records_per_chunk:
                     # Incomplete chunk - need explicit close to finalize Parquet files
@@ -963,8 +972,8 @@ class InferenceRunner(PipelineStep):
                     filename = output_writer_context._get_output_filename(
                         dummy, rank, chunk_index=chunk_idx
                     )
-                    # Use asyncio.to_thread to avoid blocking event loop with I/O
-                    await asyncio.to_thread(output_writer_context.close_file, filename)
+                    # Call synchronously (queue writer already stopped)
+                    output_writer_context.close_file(filename)
 
         # 5. Signal completion if in pipeline chain mode
         if self._processed_documents_queue is not None:
