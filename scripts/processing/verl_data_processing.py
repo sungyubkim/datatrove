@@ -747,6 +747,7 @@ def build_pipeline(args):
                 output_filename=args.output_filename_pattern,
                 compression=args.output_compression,
                 schema=VERL_SCHEMA,  # Explicit schema preserves error fields
+                batch_size=args.checkpoint_frequency,  # Match checkpoint frequency for consistent flushing
             ),
             checkpoints_local_dir=args.checkpoint_dir,
             records_per_chunk=args.checkpoint_frequency,
@@ -938,7 +939,8 @@ For details: examples/verl_data_processing.py
         type=int,
         default=500,
         metavar='INT',
-        help='Save checkpoint every N processed documents (default: 500)'
+        help='Save checkpoint every N processed documents (default: 500). '
+             'Also controls ParquetWriter batch size for consistent flushing.'
     )
 
     # ============================================================
