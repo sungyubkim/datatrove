@@ -14,6 +14,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import threading
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import AsyncGenerator, Callable, Iterable, Literal
@@ -288,7 +289,8 @@ class CheckpointManager:
             raise ValueError("records_per_chunk must be positive")
         self.records_per_chunk = records_per_chunk
 
-        self.file_locks = defaultdict(asyncio.Lock)
+        # Use threading.Lock to protect thread pool workers (not just event loop)
+        self.file_locks = defaultdict(threading.Lock)
         self.checkpoint_file_lock = asyncio.Lock()
         self.per_chunk_counts = Counter()
         self.new_completed_chunks = set()
@@ -297,46 +299,57 @@ class CheckpointManager:
     async def write_document(self, document: Document, rank: int, chunk_index: int, output_writer_context: DiskWriter):
         """
         Write a document to the checkpoint and main output writer. Potentially closes the main file if the chunk is complete.
+
+        Uses threading.Lock for thread-safe checkpoint writes across thread pool workers.
         """
-        import aiofiles
         import orjson
 
-        def ensure_dir_exists(save_dir: str):
-            """Helper to create directory if it doesn't exist"""
-            if not os.path.exists(save_dir):
-                os.makedirs(save_dir, exist_ok=True)
+        def write_checkpoint_sync():
+            """
+            Thread-safe synchronous checkpoint write.
 
-        should_update_last_chunk_index = False
-        async with self.file_locks[chunk_index]:
-            # write to main output writer
-            if "postprocess_remove" not in document.metadata:
-                output_writer_context.write(document, rank=rank, chunk_index=chunk_index)
-            self.per_chunk_counts[chunk_index] += 1
+            This function runs in a thread pool worker and uses threading.Lock to ensure
+            that checkpoint writes from different tasks don't interfere with each other.
+            """
+            with self.file_locks[chunk_index]:  # threading.Lock protects thread pool workers
+                # Write to main output writer (ParquetWriter has its own thread-safe lock)
+                if "postprocess_remove" not in document.metadata:
+                    output_writer_context.write(document, rank=rank, chunk_index=chunk_index)
+                self.per_chunk_counts[chunk_index] += 1
 
-            if self.checkpoints_local_dir is not None:
-                # save to checkpoint/chunk
-                save_path = os.path.join(self.checkpoints_local_dir, f"{rank:05d}/chunk_{chunk_index:05d}.jsonl")
-                save_dir = os.path.dirname(save_path)
-                # Use asyncio.to_thread to avoid blocking event loop with I/O
-                await asyncio.to_thread(ensure_dir_exists, save_dir)
-                # Check file existence in thread-safe way before logging
-                file_exists = await asyncio.to_thread(os.path.exists, save_path)
-                if not file_exists:
-                    logger.info(f"Creating checkpoint file {save_path}")
-                async with aiofiles.open(save_path, "ab") as f:
-                    await f.write(orjson.dumps(dataclasses.asdict(document), option=orjson.OPT_APPEND_NEWLINE))
-                # see if we have to close the file
-                if self.per_chunk_counts[chunk_index] == self.records_per_chunk:
-                    # we gotta close the main file
-                    filename = output_writer_context._get_output_filename(
-                        document, rank, chunk_index=chunk_index
-                    )
-                    # Call close_file synchronously to ensure write→close ordering
-                    # ParquetWriter.close_file() is thread-safe with its own lock
-                    output_writer_context.close_file(filename)
-                    self.new_completed_chunks.add(chunk_index)
-                    should_update_last_chunk_index = True
-        # can not be within the chunk lock
+                if self.checkpoints_local_dir is not None:
+                    # Save to checkpoint/chunk using synchronous file I/O
+                    save_path = os.path.join(self.checkpoints_local_dir, f"{rank:05d}/chunk_{chunk_index:05d}.jsonl")
+                    save_dir = os.path.dirname(save_path)
+
+                    # Ensure directory exists (synchronous)
+                    if not os.path.exists(save_dir):
+                        os.makedirs(save_dir, exist_ok=True)
+
+                    # Check if we should log file creation
+                    file_exists = os.path.exists(save_path)
+                    if not file_exists:
+                        logger.info(f"Creating checkpoint file {save_path}")
+
+                    # Synchronous file write (thread-safe with lock)
+                    with open(save_path, "ab") as f:
+                        f.write(orjson.dumps(dataclasses.asdict(document), option=orjson.OPT_APPEND_NEWLINE))
+
+                    # Check if we need to close the main file (chunk complete)
+                    if self.per_chunk_counts[chunk_index] == self.records_per_chunk:
+                        filename = output_writer_context._get_output_filename(
+                            document, rank, chunk_index=chunk_index
+                        )
+                        # Call close_file synchronously (ParquetWriter.close_file is thread-safe)
+                        output_writer_context.close_file(filename)
+                        self.new_completed_chunks.add(chunk_index)
+                        return True  # Signal to update last_chunk_index
+            return False
+
+        # Execute entire checkpoint write in thread pool (reduces thread pool usage)
+        should_update_last_chunk_index = await asyncio.to_thread(write_checkpoint_sync)
+
+        # Update last chunk index outside the lock to avoid deadlock
         if should_update_last_chunk_index:
             await self.update_last_chunk_index(rank)
 
