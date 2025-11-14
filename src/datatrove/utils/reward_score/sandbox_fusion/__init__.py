@@ -186,11 +186,79 @@ def compute_score(
     # Return dict instead of tuple for consistency with other scorers
     error_msg = ""
     if isinstance(final_metadata, list) and final_metadata:
-        # Extract first error message from metadata
-        for m in final_metadata:
-            if isinstance(m, dict) and "error" in m and m["error"]:
-                error_msg = str(m["error"])
+        # Extract detailed error information from metadata
+        error_parts = []
+
+        for i, m in enumerate(final_metadata):
+            if not isinstance(m, dict):
+                continue
+
+            status = m.get("status", "")
+
+            # Skip successful test cases
+            if status == "success":
+                continue
+
+            # Build error message based on error type
+            case_prefix = f"Test {i+1}" if len(final_metadata) > 1 else ""
+
+            if status == "compile_error" or status == "compile_timeout":
+                # Compilation error - include full compile_stderr
+                compile_stderr = m.get("compile_stderr", "")
+                if compile_stderr:
+                    error_parts.append(f"{case_prefix} compile_error: {compile_stderr}")
+                else:
+                    error_parts.append(f"{case_prefix} {status}")
+
+            elif status in ["runtime_error", "timeout"]:
+                # Runtime error - include full stderr and exit code
+                stderr = m.get("stderr", "")
+                exit_code = m.get("exit_code")
+
+                details = []
+                if exit_code is not None and exit_code != 0:
+                    details.append(f"exit_code={exit_code}")
+
+                if stderr:
+                    details.append(f"stderr: {stderr}")
+
+                if details:
+                    error_parts.append(f"{case_prefix} {status}: {' | '.join(details)}")
+                else:
+                    error_parts.append(f"{case_prefix} {status}")
+
+            elif status == "wrong_answer":
+                # Wrong answer - include full stdout and expected output
+                stdout = m.get("stdout", "")
+                expected = m.get("expected_output", "")
+
+                if stdout or expected:
+                    error_parts.append(f"{case_prefix} wrong_answer: got '{stdout}' expected '{expected}'")
+                else:
+                    error_parts.append(f"{case_prefix} wrong_answer")
+
+            elif status in ["api_error", "sandbox_error"]:
+                # API/Sandbox error - include full error message
+                api_error = m.get("api_request_error", "")
+                if api_error:
+                    error_parts.append(f"{case_prefix} {status}: {api_error}")
+                else:
+                    error_parts.append(f"{case_prefix} {status}")
+
+            else:
+                # Other errors - include status
+                error_parts.append(f"{case_prefix} {status}")
+
+            # Include first 5 errors (avoid limiting too much)
+            if len(error_parts) >= 5:
+                remaining = len([m for m in final_metadata[i+1:] if m.get("status") != "success"])
+                if remaining > 0:
+                    error_parts.append(f"... and {remaining} more errors")
                 break
+
+        # Combine error messages with separator
+        if error_parts:
+            error_msg = " || ".join(error_parts)
 
     return {
         "score": float(score),
