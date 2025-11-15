@@ -309,6 +309,9 @@ class CheckpointManager:
         # Prevent file reopening after closure
         self.closed_chunks = set()  # Track which chunks have had files closed
 
+        # Track chunks ready to close (will be closed after queue drains)
+        self.chunks_ready_to_close = {}  # {chunk_idx: (rank, filename)}
+
     async def start_writer(self, queue_size: int = 10000):
         """Start the checkpoint writer task."""
         if self.write_queue is not None:
@@ -320,7 +323,7 @@ class CheckpointManager:
         logger.info("Checkpoint writer task started")
 
     async def stop_writer(self):
-        """Stop the checkpoint writer task gracefully."""
+        """Stop the checkpoint writer task gracefully and close ready chunks."""
         if self.write_queue is None:
             return
 
@@ -332,6 +335,26 @@ class CheckpointManager:
         if self.writer_task is not None:
             await self.writer_task
         logger.info("Checkpoint writer task stopped")
+
+        # Now safe to close chunks: queue is empty, all write() calls completed
+        for chunk_idx, (rank, filename, output_writer_context) in self.chunks_ready_to_close.items():
+            logger.warning(f"[DEBUG CLOSE] Closing chunk {chunk_idx} after queue drain")
+
+            # Wait for any pending writes to complete by acquiring ParquetWriter lock
+            def wait_for_lock():
+                with output_writer_context._write_lock:
+                    pass  # Lock acquired = all pending writes done
+
+            await asyncio.to_thread(wait_for_lock)
+            logger.warning(f"[DEBUG] Lock acquired for chunk {chunk_idx}, all writes completed")
+
+            # Now safe to close
+            output_writer_context.close_file(filename)
+            self.closed_chunks.add(chunk_idx)
+            logger.warning(f"[DEBUG] Closed chunk {chunk_idx}")
+
+            # Delete JSONL checkpoint file
+            await self.update_last_chunk_index(rank)
 
     async def checkpoint_writer_task(self):
         """
@@ -419,26 +442,19 @@ class CheckpointManager:
                     # Debug logging
                     assigned = self.chunk_assigned_docs[chunk_index]
                     logger.warning(
-                        f"[DEBUG CLOSE] Closing chunk {chunk_index}: "
+                        f"[DEBUG READY] Chunk {chunk_index} ready to close: "
                         f"written={len(written)}, completed={len(completed)}, assigned={len(assigned)}, "
                         f"per_chunk_counts={self.per_chunk_counts[chunk_index]}, "
                         f"queue_size={self.write_queue.qsize()}, doc={document.id}"
                     )
 
-                    # Close Parquet file
+                    # Mark chunk as ready to close (will be closed after queue drains)
+                    # Don't close here to avoid race with pending write() operations in ParquetWriter lock
                     filename = output_writer_context._get_output_filename(
                         document, rank, chunk_index=chunk_index
                     )
-
-                    logger.warning(f"[DEBUG] Calling close_file for {filename}")
-                    output_writer_context.close_file(filename)
-                    logger.warning(f"[DEBUG] close_file returned for {filename}")
-
-                    self.closed_chunks.add(chunk_index)  # Mark as closed to prevent reopening
+                    self.chunks_ready_to_close[chunk_index] = (rank, filename, output_writer_context)
                     self.new_completed_chunks.add(chunk_index)
-
-                    # Delete JSONL checkpoint file (restored from pre-queue behavior)
-                    await self.update_last_chunk_index(rank)
 
             except Exception as e:
                 logger.error(f"Error in checkpoint writer: {e}", exc_info=True)
