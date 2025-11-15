@@ -430,10 +430,15 @@ class CheckpointManager:
                         f"queue_size={self.write_queue.qsize()}, doc={document.id}"
                     )
 
-                # Close condition: BOTH written AND completed must reach records_per_chunk
-                # This guarantees all documents were write()-ed AND queue is drained
+                # Close condition: written AND completed must reach records_per_chunk AND queue empty
+                # This guarantees:
+                # 1. All documents assigned to this chunk (written==records_per_chunk)
+                # 2. All documents processed (completed==records_per_chunk)
+                # 3. All pending writes for this chunk finished (queue empty for this chunk)
+                # With high concurrency, queue might still have items even if written==completed
                 if (len(written) == self.records_per_chunk and
                     len(completed) == self.records_per_chunk and
+                    self.write_queue.qsize() == 0 and  # NEW: Ensure queue fully drained
                     chunk_index not in self.closed_chunks):  # Prevent double-close
                     # Debug logging
                     assigned = self.chunk_assigned_docs[chunk_index]
@@ -446,9 +451,10 @@ class CheckpointManager:
 
                     # Close chunk IMMEDIATELY
                     # Safe to close because:
-                    # 1. written==100 means all write() calls completed (synchronous, sequential)
-                    # 2. completed==100 means all documents dequeued and processed
-                    # 3. checkpoint_writer_task is single async task (no concurrent write() calls)
+                    # 1. written==records_per_chunk means all write() calls completed (synchronous, sequential)
+                    # 2. completed==records_per_chunk means all documents dequeued and processed
+                    # 3. queue_size==0 means no pending writes (critical for high concurrency!)
+                    # 4. checkpoint_writer_task is single async task (no concurrent write() calls)
                     filename = output_writer_context._get_output_filename(
                         document, rank, chunk_index=chunk_index
                     )
