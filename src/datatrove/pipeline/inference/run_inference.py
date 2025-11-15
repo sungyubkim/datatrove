@@ -325,22 +325,42 @@ class CheckpointManager:
     async def stop_writer(self):
         """Stop the checkpoint writer task gracefully and close ready chunks."""
         if self.write_queue is None:
+            logger.warning("[DEBUG] stop_writer: write_queue is None, returning")
             return
 
+        logger.warning(
+            f"[DEBUG] stop_writer() START: "
+            f"chunks_ready_to_close={list(self.chunks_ready_to_close.keys())}, "
+            f"queue_size={self.write_queue.qsize()}"
+        )
+
         # Send shutdown signal
+        logger.warning("[DEBUG] Sending shutdown signal to writer task")
         await self.write_queue.put(None)
+
         # Wait for queue to drain
+        logger.warning("[DEBUG] Waiting for queue to drain...")
         await self.write_queue.join()
+        logger.warning("[DEBUG] Queue drained")
+
         # Wait for writer task to finish
         if self.writer_task is not None:
+            logger.warning("[DEBUG] Waiting for writer task to finish...")
             await self.writer_task
+            logger.warning("[DEBUG] Writer task finished")
         logger.info("Checkpoint writer task stopped")
 
         # Now safe to close chunks: queue is empty, all write() calls completed
+        logger.warning(
+            f"[DEBUG] Starting to close {len(self.chunks_ready_to_close)} chunks: "
+            f"{list(self.chunks_ready_to_close.keys())}"
+        )
+
         for chunk_idx, (rank, filename, output_writer_context) in self.chunks_ready_to_close.items():
-            logger.warning(f"[DEBUG CLOSE] Closing chunk {chunk_idx} after queue drain")
+            logger.warning(f"[DEBUG CLOSE] Processing chunk {chunk_idx} for close")
 
             # Wait for any pending writes to complete by acquiring ParquetWriter lock
+            logger.warning(f"[DEBUG] Waiting for ParquetWriter lock for chunk {chunk_idx}...")
             def wait_for_lock():
                 with output_writer_context._write_lock:
                     pass  # Lock acquired = all pending writes done
@@ -349,12 +369,17 @@ class CheckpointManager:
             logger.warning(f"[DEBUG] Lock acquired for chunk {chunk_idx}, all writes completed")
 
             # Now safe to close
+            logger.warning(f"[DEBUG] Calling close_file() for chunk {chunk_idx}, filename={filename}")
             output_writer_context.close_file(filename)
             self.closed_chunks.add(chunk_idx)
-            logger.warning(f"[DEBUG] Closed chunk {chunk_idx}")
+            logger.warning(f"[DEBUG] close_file() returned for chunk {chunk_idx}")
 
             # Delete JSONL checkpoint file
+            logger.warning(f"[DEBUG] Deleting JSONL checkpoint for chunk {chunk_idx}")
             await self.update_last_chunk_index(rank)
+            logger.warning(f"[DEBUG] JSONL checkpoint deleted for chunk {chunk_idx}")
+
+        logger.warning("[DEBUG] stop_writer() COMPLETE")
 
     async def checkpoint_writer_task(self):
         """
