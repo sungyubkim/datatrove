@@ -444,26 +444,15 @@ class CheckpointManager:
                         f"queue_size={self.write_queue.qsize()}, doc={document.id}"
                     )
 
-                    # Close chunk IMMEDIATELY to prevent further processing delays
-                    # But first wait for ParquetWriter lock to ensure all write() calls completed
+                    # Close chunk IMMEDIATELY
+                    # Safe to close because:
+                    # 1. written==100 means all write() calls completed (synchronous, sequential)
+                    # 2. completed==100 means all documents dequeued and processed
+                    # 3. checkpoint_writer_task is single async task (no concurrent write() calls)
                     filename = output_writer_context._get_output_filename(
                         document, rank, chunk_index=chunk_index
                     )
 
-                    # CRITICAL: Wait for ParquetWriter._write_lock to ensure all writes flushed
-                    # This prevents the AsyncIO + threading.Lock race condition where:
-                    # - write() tries to acquire lock
-                    # - Lock busy → GIL released → add() executes
-                    # - Close condition met → close_file() called
-                    # - Remaining writes stuck waiting for lock after file closed
-                    logger.warning(f"[DEBUG] Waiting for ParquetWriter lock for chunk {chunk_index}...")
-                    def wait_for_lock():
-                        with output_writer_context._write_lock:
-                            pass  # Lock acquired = all pending writes completed
-                    await asyncio.to_thread(wait_for_lock)
-                    logger.warning(f"[DEBUG] Lock acquired, all writes completed for chunk {chunk_index}")
-
-                    # Now safe to close - all write() calls finished
                     logger.warning(f"[DEBUG] Calling close_file() for chunk {chunk_index}, filename={filename}")
                     output_writer_context.close_file(filename)
                     self.closed_chunks.add(chunk_index)
