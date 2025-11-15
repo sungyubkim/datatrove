@@ -324,8 +324,10 @@ class CheckpointManager:
 
     async def stop_writer(self):
         """Stop the checkpoint writer task gracefully and close ready chunks."""
+        logger.warning(f"[DEBUG] stop_writer() CALLED: write_queue={self.write_queue is not None}")
+
         if self.write_queue is None:
-            logger.warning("[DEBUG] stop_writer: write_queue is None, returning")
+            logger.warning("[DEBUG] stop_writer: write_queue is None, returning EARLY")
             return
 
         logger.warning(
@@ -1080,7 +1082,9 @@ class InferenceRunner(PipelineStep):
                 await asyncio.gather(*tasks_pool)
 
             # Stop checkpoint writer and wait for queue to drain
+            logger.warning(f"[DEBUG] About to call stop_writer(). chunks_ready_to_close={list(self.checkpoint_manager.chunks_ready_to_close.keys())}")
             await self.checkpoint_manager.stop_writer()
+            logger.warning("[DEBUG] stop_writer() returned")
 
             # Cleanup after writer stopped - only if we processed documents
             if record_idx >= 0:  # Guard against empty input (no documents processed)
