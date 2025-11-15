@@ -365,9 +365,10 @@ class CheckpointManager:
                             f"per_chunk_counts={self.per_chunk_counts[chunk_index]}"
                         )
 
-                    output_writer_context.write(document, rank=rank, chunk_index=chunk_index)
-                    # Track that document was actually written to ParquetWriter
+                    # Track BEFORE write to prevent race condition
                     self.chunk_written_docs[chunk_index].add(document.id)
+
+                    output_writer_context.write(document, rank=rank, chunk_index=chunk_index)
 
                 # Track document completion (race condition prevention)
                 self.chunk_completed_docs[chunk_index].add(document.id)
@@ -398,22 +399,35 @@ class CheckpointManager:
                 # This ensures we don't close the file while documents are still in the queue
                 written = self.chunk_written_docs[chunk_index]
 
+                # Debug: Log progress periodically
+                written_count = len(written)
+                if written_count % 10 == 0 or written_count >= self.records_per_chunk - 5:
+                    logger.warning(
+                        f"[DEBUG] Chunk {chunk_index} progress: written={written_count}/{self.records_per_chunk}, "
+                        f"completed={len(self.chunk_completed_docs[chunk_index])}, "
+                        f"queue_size={self.write_queue.qsize()}, doc={document.id}"
+                    )
+
                 if len(written) == self.records_per_chunk:
                     # Debug logging
                     assigned = self.chunk_assigned_docs[chunk_index]
                     completed = self.chunk_completed_docs[chunk_index]
-                    logger.info(
-                        f"Closing chunk {chunk_index}: "
+                    logger.warning(
+                        f"[DEBUG CLOSE] Closing chunk {chunk_index}: "
                         f"written={len(written)}, assigned={len(assigned)}, completed={len(completed)}, "
                         f"per_chunk_counts={self.per_chunk_counts[chunk_index]}, "
-                        f"document={document.id}"
+                        f"queue_size={self.write_queue.qsize()}, doc={document.id}"
                     )
 
                     # Close Parquet file
                     filename = output_writer_context._get_output_filename(
                         document, rank, chunk_index=chunk_index
                     )
+
+                    logger.warning(f"[DEBUG] Calling close_file for {filename}")
                     output_writer_context.close_file(filename)
+                    logger.warning(f"[DEBUG] close_file returned for {filename}")
+
                     self.closed_chunks.add(chunk_index)  # Mark as closed to prevent reopening
                     self.new_completed_chunks.add(chunk_index)
 
