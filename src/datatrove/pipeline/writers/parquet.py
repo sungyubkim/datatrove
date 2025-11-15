@@ -56,9 +56,18 @@ class ParquetWriter(DiskWriter):
             old_filename: old full filename
             new_filename: new full filename
         """
+        logger.warning(
+            f"[PARQUET DEBUG] _on_file_switch() called: "
+            f"original_name={original_name}, old={old_filename}, new={new_filename}, "
+            f"batch_size={len(self._batches.get(original_name, []))}"
+        )
+
         with self._write_lock:
+            # Note: parent class _on_file_switch calls _write_batch to flush current batch
             self._writers.pop(original_name).close()
             super()._on_file_switch(original_name, old_filename, new_filename)
+
+        logger.warning(f"[PARQUET DEBUG] _on_file_switch() completed")
 
     def close_file(self, original_name: str):
         """
@@ -74,6 +83,13 @@ class ParquetWriter(DiskWriter):
         """
         # Use lock to ensure thread-safe access to _batches and _writers
         with self._write_lock:
+            # Debug: Log all batch states before closing
+            batch_summary = {k: len(v) for k, v in self._batches.items()}
+            logger.warning(
+                f"[PARQUET DEBUG] close_file() called for {original_name}, "
+                f"all_batches={batch_summary}"
+            )
+
             try:
                 # 1. Flush any remaining batch data for this file
                 if original_name in self._batches:
@@ -97,15 +113,22 @@ class ParquetWriter(DiskWriter):
         if not self._batches[filename]:
             return
         import pyarrow as pa
+        from datatrove.utils.logging import logger
+
+        batch_size = len(self._batches[filename])
+        logger.warning(f"[PARQUET DEBUG] _write_batch() called for {filename}, writing {batch_size} documents")
 
         # prepare batch
         batch = pa.RecordBatch.from_pylist(self._batches.pop(filename), schema=self.schema)
         # write batch
         self._writers[filename].write_batch(batch)
 
+        logger.warning(f"[PARQUET DEBUG] _write_batch() completed for {filename}, {batch_size} documents written to PyArrow")
+
     def _write(self, document: dict, file_handler: IO, filename: str):
         import pyarrow as pa
         import pyarrow.parquet as pq
+        from datatrove.utils.logging import logger
 
         # Use lock to ensure thread-safe access to _batches and _writers
         with self._write_lock:
@@ -115,8 +138,22 @@ class ParquetWriter(DiskWriter):
                     schema=self.schema if self.schema is not None else pa.RecordBatch.from_pylist([document]).schema,
                     compression=self.compression,
                 )
+                logger.warning(f"[PARQUET DEBUG] Created writer for {filename}, batch_size={self.batch_size}")
+
+            batch_size_before = len(self._batches[filename])
             self._batches[filename].append(document)
+            batch_size_after = len(self._batches[filename])
+
+            # Log every 10th append or when close to batch_size
+            if batch_size_after % 10 == 0 or batch_size_after >= self.batch_size - 5:
+                logger.warning(
+                    f"[PARQUET DEBUG] Appended to {filename}: "
+                    f"batch_size_before={batch_size_before}, batch_size_after={batch_size_after}, "
+                    f"target_batch_size={self.batch_size}"
+                )
+
             if len(self._batches[filename]) == self.batch_size:
+                logger.warning(f"[PARQUET DEBUG] AUTO-FLUSH triggered for {filename} (batch_size={self.batch_size})")
                 self._write_batch(filename)
 
     def close(self):
