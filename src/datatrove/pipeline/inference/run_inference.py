@@ -365,10 +365,11 @@ class CheckpointManager:
                             f"per_chunk_counts={self.per_chunk_counts[chunk_index]}"
                         )
 
-                    # Track BEFORE write to prevent race condition
-                    self.chunk_written_docs[chunk_index].add(document.id)
-
+                    # Write FIRST
                     output_writer_context.write(document, rank=rank, chunk_index=chunk_index)
+
+                    # Track AFTER write completes to ensure write() was actually called
+                    self.chunk_written_docs[chunk_index].add(document.id)
 
                 # Track document completion (race condition prevention)
                 self.chunk_completed_docs[chunk_index].add(document.id)
@@ -396,25 +397,30 @@ class CheckpointManager:
                         os.fsync(f.fileno())  # Force to disk
 
                 # Check if chunk complete: ALL documents must be WRITTEN to ParquetWriter
+                # AND all documents must be completed (dequeued from write queue)
                 # This ensures we don't close the file while documents are still in the queue
                 written = self.chunk_written_docs[chunk_index]
+                completed = self.chunk_completed_docs[chunk_index]
 
                 # Debug: Log progress periodically
                 written_count = len(written)
+                completed_count = len(completed)
                 if written_count % 10 == 0 or written_count >= self.records_per_chunk - 5:
                     logger.warning(
                         f"[DEBUG] Chunk {chunk_index} progress: written={written_count}/{self.records_per_chunk}, "
-                        f"completed={len(self.chunk_completed_docs[chunk_index])}, "
+                        f"completed={completed_count}/{self.records_per_chunk}, "
                         f"queue_size={self.write_queue.qsize()}, doc={document.id}"
                     )
 
-                if len(written) == self.records_per_chunk:
+                # Close condition: BOTH written AND completed must reach records_per_chunk
+                # This guarantees all documents were write()-ed AND queue is drained
+                if (len(written) == self.records_per_chunk and
+                    len(completed) == self.records_per_chunk):
                     # Debug logging
                     assigned = self.chunk_assigned_docs[chunk_index]
-                    completed = self.chunk_completed_docs[chunk_index]
                     logger.warning(
                         f"[DEBUG CLOSE] Closing chunk {chunk_index}: "
-                        f"written={len(written)}, assigned={len(assigned)}, completed={len(completed)}, "
+                        f"written={len(written)}, completed={len(completed)}, assigned={len(assigned)}, "
                         f"per_chunk_counts={self.per_chunk_counts[chunk_index]}, "
                         f"queue_size={self.write_queue.qsize()}, doc={document.id}"
                     )
