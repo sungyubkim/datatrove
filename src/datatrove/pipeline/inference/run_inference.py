@@ -305,6 +305,9 @@ class CheckpointManager:
         self.chunk_assigned_docs = defaultdict(set)  # {chunk_idx: {doc_ids}}
         self.chunk_completed_docs = defaultdict(set)  # {chunk_idx: {doc_ids}}
 
+        # Prevent file reopening after closure
+        self.closed_chunks = set()  # Track which chunks have had files closed
+
     async def start_writer(self, queue_size: int = 10000):
         """Start the checkpoint writer task."""
         if self.write_queue is not None:
@@ -350,6 +353,16 @@ class CheckpointManager:
 
                 # Write to main output writer (ParquetWriter has its own lock)
                 if "postprocess_remove" not in document.metadata:
+                    # Debug: Check if writing to already closed chunk
+                    if chunk_index in self.closed_chunks:
+                        logger.error(
+                            f"[BUG DETECTED] Attempting to write to already closed chunk {chunk_index}! "
+                            f"Document: {document.id}, "
+                            f"assigned={len(self.chunk_assigned_docs[chunk_index])}, "
+                            f"completed={len(self.chunk_completed_docs[chunk_index])}, "
+                            f"per_chunk_counts={self.per_chunk_counts[chunk_index]}"
+                        )
+
                     output_writer_context.write(document, rank=rank, chunk_index=chunk_index)
 
                 # Track document completion (race condition prevention)
@@ -383,11 +396,20 @@ class CheckpointManager:
 
                 if (len(assigned) == self.records_per_chunk and
                     assigned == completed):
+                    # Debug logging
+                    logger.warning(
+                        f"[DEBUG] Closing chunk {chunk_index}: "
+                        f"assigned={len(assigned)}, completed={len(completed)}, "
+                        f"per_chunk_counts={self.per_chunk_counts[chunk_index]}, "
+                        f"document={document.id}"
+                    )
+
                     # Close Parquet file
                     filename = output_writer_context._get_output_filename(
                         document, rank, chunk_index=chunk_index
                     )
                     output_writer_context.close_file(filename)
+                    self.closed_chunks.add(chunk_index)  # Mark as closed to prevent reopening
                     self.new_completed_chunks.add(chunk_index)
 
                     # Delete JSONL checkpoint file (restored from pre-queue behavior)
@@ -511,6 +533,10 @@ class CheckpointManager:
                 # clean up - use pop with default to avoid KeyError if chunk wasn't tracked
                 self.per_chunk_counts.pop(self.last_chunk_index, None)
                 self.new_completed_chunks.remove(self.last_chunk_index)
+                # Clean up tracking state to prevent memory leak
+                self.chunk_assigned_docs.pop(self.last_chunk_index, None)
+                self.chunk_completed_docs.pop(self.last_chunk_index, None)
+                # Note: closed_chunks is NOT cleared - we want to remember closed chunks
                 # save new last chunk index
                 # Use asyncio.to_thread to avoid blocking event loop with I/O
                 await asyncio.to_thread(
