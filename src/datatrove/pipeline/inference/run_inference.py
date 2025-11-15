@@ -304,6 +304,7 @@ class CheckpointManager:
         # Race condition prevention: track document assignment and completion per chunk
         self.chunk_assigned_docs = defaultdict(set)  # {chunk_idx: {doc_ids}}
         self.chunk_completed_docs = defaultdict(set)  # {chunk_idx: {doc_ids}}
+        self.chunk_written_docs = defaultdict(set)  # {chunk_idx: {doc_ids}} - Actually written to ParquetWriter
 
         # Prevent file reopening after closure
         self.closed_chunks = set()  # Track which chunks have had files closed
@@ -360,10 +361,13 @@ class CheckpointManager:
                             f"Document: {document.id}, "
                             f"assigned={len(self.chunk_assigned_docs[chunk_index])}, "
                             f"completed={len(self.chunk_completed_docs[chunk_index])}, "
+                            f"written={len(self.chunk_written_docs[chunk_index])}, "
                             f"per_chunk_counts={self.per_chunk_counts[chunk_index]}"
                         )
 
                     output_writer_context.write(document, rank=rank, chunk_index=chunk_index)
+                    # Track that document was actually written to ParquetWriter
+                    self.chunk_written_docs[chunk_index].add(document.id)
 
                 # Track document completion (race condition prevention)
                 self.chunk_completed_docs[chunk_index].add(document.id)
@@ -390,16 +394,17 @@ class CheckpointManager:
                         f.flush()
                         os.fsync(f.fileno())  # Force to disk
 
-                # Check if chunk complete: ALL assigned documents must be completed
-                assigned = self.chunk_assigned_docs[chunk_index]
-                completed = self.chunk_completed_docs[chunk_index]
+                # Check if chunk complete: ALL documents must be WRITTEN to ParquetWriter
+                # This ensures we don't close the file while documents are still in the queue
+                written = self.chunk_written_docs[chunk_index]
 
-                if (len(assigned) == self.records_per_chunk and
-                    assigned == completed):
+                if len(written) == self.records_per_chunk:
                     # Debug logging
-                    logger.warning(
-                        f"[DEBUG] Closing chunk {chunk_index}: "
-                        f"assigned={len(assigned)}, completed={len(completed)}, "
+                    assigned = self.chunk_assigned_docs[chunk_index]
+                    completed = self.chunk_completed_docs[chunk_index]
+                    logger.info(
+                        f"Closing chunk {chunk_index}: "
+                        f"written={len(written)}, assigned={len(assigned)}, completed={len(completed)}, "
                         f"per_chunk_counts={self.per_chunk_counts[chunk_index]}, "
                         f"document={document.id}"
                     )
@@ -413,9 +418,7 @@ class CheckpointManager:
                     self.new_completed_chunks.add(chunk_index)
 
                     # Delete JSONL checkpoint file (restored from pre-queue behavior)
-                    logger.warning(f"[DEBUG] Calling update_last_chunk_index for chunk {chunk_index}")
                     await self.update_last_chunk_index(rank)
-                    logger.warning(f"[DEBUG] Returned from update_last_chunk_index for chunk {chunk_index}")
 
             except Exception as e:
                 logger.error(f"Error in checkpoint writer: {e}", exc_info=True)
@@ -522,26 +525,15 @@ class CheckpointManager:
             with self.checkpoints_local_dir_df.open(filepath, "wt") as f:
                 f.write(content)
 
-        logger.warning(
-            f"[DEBUG] update_last_chunk_index ENTER: "
-            f"last_chunk_index={self.last_chunk_index}, "
-            f"new_completed_chunks={self.new_completed_chunks}"
-        )
-
         async with self.checkpoint_file_lock:
-            logger.warning("[DEBUG] Acquired checkpoint_file_lock")
-
             # possibly multiple ones, in case file +2 finished before +1
             while self.last_chunk_index + 1 in self.new_completed_chunks:
-                logger.warning(f"[DEBUG] Processing chunk {self.last_chunk_index + 1}")
                 self.last_chunk_index += 1
                 chunk_file = os.path.join(
                     self.checkpoints_local_dir, f"{rank:05d}/chunk_{self.last_chunk_index:05d}.jsonl"
                 )
                 # Use asyncio.to_thread to avoid blocking event loop with I/O
-                logger.warning(f"[DEBUG] Removing chunk file {chunk_file}")
                 await asyncio.to_thread(remove_chunk_file, chunk_file)
-                logger.warning(f"[DEBUG] Removed chunk file {chunk_file}")
 
                 logger.info(f"Finished chunk {self.last_chunk_index}")
                 # clean up - use pop with default to avoid KeyError if chunk wasn't tracked
@@ -550,18 +542,13 @@ class CheckpointManager:
                 # Clean up tracking state to prevent memory leak
                 self.chunk_assigned_docs.pop(self.last_chunk_index, None)
                 self.chunk_completed_docs.pop(self.last_chunk_index, None)
+                self.chunk_written_docs.pop(self.last_chunk_index, None)
                 # Note: closed_chunks is NOT cleared - we want to remember closed chunks
                 # save new last chunk index
                 # Use asyncio.to_thread to avoid blocking event loop with I/O
-                logger.warning(f"[DEBUG] Writing last_chunk_index {self.last_chunk_index}")
                 await asyncio.to_thread(
                     write_last_chunk_index, f"last_chunk/{rank:05d}.txt", str(self.last_chunk_index)
                 )
-                logger.warning(f"[DEBUG] Wrote last_chunk_index {self.last_chunk_index}")
-
-            logger.warning("[DEBUG] Exiting while loop, releasing lock")
-
-        logger.warning("[DEBUG] update_last_chunk_index EXIT")
 
     def chunk_index_gen(self):
         ci = 0
@@ -911,6 +898,10 @@ class InferenceRunner(PipelineStep):
             Raises:
                 InferenceProcessingError: If document processing fails
             """
+            # Record document assignment to chunk FIRST (before any async operations)
+            # This prevents race condition where document completes before assignment is recorded
+            self.checkpoint_manager.assign_document(doc.id, chunk_index)
+
             try:
                 # Get payloads from query_builder
                 payloads_result = self.query_builder(self, doc)
@@ -1018,10 +1009,8 @@ class InferenceRunner(PipelineStep):
                     for task in done:
                         await task  # Re-raises any unhandled exception
 
-                # Record document assignment to chunk (for race condition prevention)
-                self.checkpoint_manager.assign_document(record.id, chunk_index)
-
                 # Add task for current record
+                # Note: assign_document() is called inside _handle_record() to prevent race condition
                 task = asyncio.create_task(_handle_record(record, rank, chunk_index, output_writer_context))
                 tasks_pool.add(task)
 
