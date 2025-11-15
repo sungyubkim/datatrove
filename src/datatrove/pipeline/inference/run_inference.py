@@ -413,7 +413,9 @@ class CheckpointManager:
                     self.new_completed_chunks.add(chunk_index)
 
                     # Delete JSONL checkpoint file (restored from pre-queue behavior)
+                    logger.warning(f"[DEBUG] Calling update_last_chunk_index for chunk {chunk_index}")
                     await self.update_last_chunk_index(rank)
+                    logger.warning(f"[DEBUG] Returned from update_last_chunk_index for chunk {chunk_index}")
 
             except Exception as e:
                 logger.error(f"Error in checkpoint writer: {e}", exc_info=True)
@@ -520,15 +522,27 @@ class CheckpointManager:
             with self.checkpoints_local_dir_df.open(filepath, "wt") as f:
                 f.write(content)
 
+        logger.warning(
+            f"[DEBUG] update_last_chunk_index ENTER: "
+            f"last_chunk_index={self.last_chunk_index}, "
+            f"new_completed_chunks={self.new_completed_chunks}"
+        )
+
         async with self.checkpoint_file_lock:
+            logger.warning("[DEBUG] Acquired checkpoint_file_lock")
+
             # possibly multiple ones, in case file +2 finished before +1
             while self.last_chunk_index + 1 in self.new_completed_chunks:
+                logger.warning(f"[DEBUG] Processing chunk {self.last_chunk_index + 1}")
                 self.last_chunk_index += 1
                 chunk_file = os.path.join(
                     self.checkpoints_local_dir, f"{rank:05d}/chunk_{self.last_chunk_index:05d}.jsonl"
                 )
                 # Use asyncio.to_thread to avoid blocking event loop with I/O
+                logger.warning(f"[DEBUG] Removing chunk file {chunk_file}")
                 await asyncio.to_thread(remove_chunk_file, chunk_file)
+                logger.warning(f"[DEBUG] Removed chunk file {chunk_file}")
+
                 logger.info(f"Finished chunk {self.last_chunk_index}")
                 # clean up - use pop with default to avoid KeyError if chunk wasn't tracked
                 self.per_chunk_counts.pop(self.last_chunk_index, None)
@@ -539,9 +553,15 @@ class CheckpointManager:
                 # Note: closed_chunks is NOT cleared - we want to remember closed chunks
                 # save new last chunk index
                 # Use asyncio.to_thread to avoid blocking event loop with I/O
+                logger.warning(f"[DEBUG] Writing last_chunk_index {self.last_chunk_index}")
                 await asyncio.to_thread(
                     write_last_chunk_index, f"last_chunk/{rank:05d}.txt", str(self.last_chunk_index)
                 )
+                logger.warning(f"[DEBUG] Wrote last_chunk_index {self.last_chunk_index}")
+
+            logger.warning("[DEBUG] Exiting while loop, releasing lock")
+
+        logger.warning("[DEBUG] update_last_chunk_index EXIT")
 
     def chunk_index_gen(self):
         ci = 0
