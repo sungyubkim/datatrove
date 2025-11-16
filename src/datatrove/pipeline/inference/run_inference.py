@@ -1048,7 +1048,11 @@ class InferenceRunner(PipelineStep):
 
         # 2. Main processing loop
         tasks_pool: set[asyncio.Task] = set()
-        with self.output_writer as output_writer_context:
+
+        # Use explicit context management instead of 'with' to control close timing
+        # Critical: close() must only be called AFTER checkpoint_writer_task completes
+        output_writer_context = self.output_writer
+        try:
             # this will also upload locally cached documents to the output writer
             documents_to_skip, processed_ids = await self.checkpoint_manager.parse_existing_checkpoints(
                 rank, output_writer_context
@@ -1092,6 +1096,7 @@ class InferenceRunner(PipelineStep):
                 await asyncio.gather(*tasks_pool)
 
             # Stop checkpoint writer and wait for queue to drain
+            # CRITICAL: Must complete before close() to prevent writer recreation
             logger.warning("[DEBUG] About to call stop_writer()")
             await self.checkpoint_manager.stop_writer()
             logger.warning("[DEBUG] stop_writer() returned")
@@ -1100,7 +1105,7 @@ class InferenceRunner(PipelineStep):
             if record_idx >= 0:  # Guard against empty input (no documents processed)
                 await self.checkpoint_manager.cleanup_last_chunk(rank, chunk_index)
 
-            # 4. Close any incomplete chunks before context exit
+            # 4. Close any incomplete chunks
             # This ensures Parquet files are finalized even if records_per_chunk wasn't reached
             # Queue writer is stopped, safe to call close_file directly
             for chunk_idx, count in self.checkpoint_manager.per_chunk_counts.items():
@@ -1113,6 +1118,12 @@ class InferenceRunner(PipelineStep):
                     )
                     # Call synchronously (queue writer already stopped)
                     output_writer_context.close_file(filename)
+
+        finally:
+            # Close output writer ONLY after all queue processing is complete
+            # This prevents race condition where close() clears writers while
+            # checkpoint_writer_task is still processing queued documents
+            output_writer_context.close()
 
         # 5. Signal completion if in pipeline chain mode
         if self._processed_documents_queue is not None:
