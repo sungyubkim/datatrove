@@ -1049,8 +1049,8 @@ class InferenceRunner(PipelineStep):
         # 2. Main processing loop
         tasks_pool: set[asyncio.Task] = set()
 
-        # Use explicit context management instead of 'with' to control close timing
-        # Critical: close() must only be called AFTER checkpoint_writer_task completes
+        # Use explicit close() calls instead of finally block to prevent premature execution
+        # Critical: close() must only be called AFTER checkpoint_writer_task completes via stop_writer()
         output_writer_context = self.output_writer
         try:
             # this will also upload locally cached documents to the output writer
@@ -1119,11 +1119,32 @@ class InferenceRunner(PipelineStep):
                     # Call synchronously (queue writer already stopped)
                     output_writer_context.close_file(filename)
 
-        finally:
-            # Close output writer ONLY after all queue processing is complete
-            # This prevents race condition where close() clears writers while
-            # checkpoint_writer_task is still processing queued documents
+            # 5. Close output writer after all processing complete
+            # Safe because stop_writer() has drained the queue
+            logger.warning("[DEBUG] About to call output_writer_context.close()")
             output_writer_context.close()
+            logger.warning("[DEBUG] output_writer_context.close() returned")
+
+        except Exception as e:
+            # On exception, still drain queue before closing to prevent data loss
+            logger.error(f"[DEBUG] Exception in run_async: {type(e).__name__}: {e}", exc_info=True)
+            try:
+                logger.warning("[DEBUG EXCEPTION] About to call stop_writer() in exception handler")
+                await self.checkpoint_manager.stop_writer()
+                logger.warning("[DEBUG EXCEPTION] stop_writer() returned in exception handler")
+            except Exception as stop_error:
+                logger.error(f"[DEBUG EXCEPTION] Error in stop_writer(): {stop_error}", exc_info=True)
+
+            # Close writer after queue drained
+            try:
+                logger.warning("[DEBUG EXCEPTION] About to call close() in exception handler")
+                output_writer_context.close()
+                logger.warning("[DEBUG EXCEPTION] close() returned in exception handler")
+            except Exception as close_error:
+                logger.error(f"[DEBUG EXCEPTION] Error in close(): {close_error}", exc_info=True)
+
+            # Re-raise original exception
+            raise
 
         # 5. Signal completion if in pipeline chain mode
         if self._processed_documents_queue is not None:
