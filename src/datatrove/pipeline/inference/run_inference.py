@@ -383,11 +383,34 @@ class CheckpointManager:
                             f"per_chunk_counts={self.per_chunk_counts[chunk_index]}"
                         )
 
+                    # Debug: Track write() call
+                    written_count_before = len(self.chunk_written_docs[chunk_index])
+                    logger.warning(
+                        f"[WRITE DEBUG] BEFORE write(): doc={document.id}, chunk={chunk_index}, "
+                        f"written_count={written_count_before}"
+                    )
+
                     # Write FIRST
-                    output_writer_context.write(document, rank=rank, chunk_index=chunk_index)
+                    try:
+                        output_writer_context.write(document, rank=rank, chunk_index=chunk_index)
+                        logger.warning(
+                            f"[WRITE DEBUG] AFTER write() SUCCESS: doc={document.id}, chunk={chunk_index}"
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"[WRITE DEBUG] write() FAILED: doc={document.id}, chunk={chunk_index}, "
+                            f"error={type(e).__name__}: {e}",
+                            exc_info=True
+                        )
+                        raise  # Re-raise to maintain error handling
 
                     # Track AFTER write completes to ensure write() was actually called
                     self.chunk_written_docs[chunk_index].add(document.id)
+                    written_count_after = len(self.chunk_written_docs[chunk_index])
+                    logger.warning(
+                        f"[WRITE DEBUG] TRACKED: doc={document.id}, chunk={chunk_index}, "
+                        f"written_count={written_count_after}"
+                    )
 
                 # Track document completion (race condition prevention)
                 self.chunk_completed_docs[chunk_index].add(document.id)
