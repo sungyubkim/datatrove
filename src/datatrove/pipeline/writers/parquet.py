@@ -157,7 +157,21 @@ class ParquetWriter(DiskWriter):
                 self._write_batch(filename)
 
     def close(self):
+        import traceback
+
+        # Log who called close() and why
+        stack = ''.join(traceback.format_stack()[-5:-1])  # Last 4 frames before this one
+        logger.warning(
+            f"[PARQUET DEBUG] close() CALLED! "
+            f"This will clear {len(self._writers)} writers and {len(self._batches)} batches.\n"
+            f"Call stack:\n{stack}"
+        )
+
         with self._write_lock:
+            # Log state before clearing
+            batch_summary = {k: len(v) for k, v in self._batches.items()}
+            logger.warning(f"[PARQUET DEBUG] Flushing remaining batches: {batch_summary}")
+
             for filename in list(self._batches.keys()):
                 self._write_batch(filename)
             for writer in self._writers.values():
@@ -165,3 +179,5 @@ class ParquetWriter(DiskWriter):
             self._batches.clear()
             self._writers.clear()
             super().close()
+
+        logger.warning(f"[PARQUET DEBUG] close() COMPLETED - all writers cleared")
