@@ -1012,12 +1012,15 @@ class InferenceRunner(PipelineStep):
                 # Wait for all requests to complete and collect results in order
                 results = await asyncio.gather(*request_tasks)
 
+                # Log errors but don't raise - store InferenceError in results for tracking
                 for result in results:
-                    if isinstance(result, InferenceError) and (
-                        not self.skip_bad_requests or "BadRequestError" not in result.error
-                    ):
-                        # re-raise any non-skippable errors
-                        raise InferenceProcessingError(doc, result.error)
+                    if isinstance(result, InferenceError):
+                        if "BadRequestError" in result.error:
+                            logger.warning(f"BadRequestError for document {doc.id}: {result.error}")
+                        elif "InternalServerError" in result.error:
+                            logger.error(f"⚠️  InternalServerError for document {doc.id}: {result.error}")
+                        else:
+                            logger.error(f"Inference error for document {doc.id}: {result.error}")
 
                 # Store results directly in document metadata
                 doc.metadata["inference_results"] = results
@@ -1216,14 +1219,22 @@ class InferenceRunner(PipelineStep):
                     if doc is None:  # Sentinel value signals completion
                         break
             except Exception as e:
-                logger.error(f"Error in async worker: {e}")
+                logger.error(f"Error in async worker queue transfer: {e}")
                 sync_queue.put(None)  # Ensure sentinel is sent even on error
                 raise
             finally:
                 # Wait for async processing to complete
-                await async_task
-                # Clean up
-                self._processed_documents_queue = None
+                # This may raise exceptions from run_async
+                try:
+                    await async_task
+                except Exception as e:
+                    # Log run_async exceptions before re-raising
+                    logger.error(f"Exception in run_async (run_with_yield mode): {type(e).__name__}: {e}")
+                    sync_queue.put(None)  # Ensure sentinel is sent
+                    raise  # Re-raise to propagate to future
+                finally:
+                    # Clean up
+                    self._processed_documents_queue = None
 
         # Run async worker in background thread
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
@@ -1244,10 +1255,20 @@ class InferenceRunner(PipelineStep):
                     except Empty:
                         # Check if background task failed
                         if future.done():
-                            # Re-raise any exception from async worker
-                            future.result()
+                            # This will re-raise any exception from async_worker or run_async
+                            try:
+                                future.result()
+                            except Exception as e:
+                                # Log before re-raising for visibility
+                                logger.error(f"Background task failed in run_with_yield: {type(e).__name__}: {e}")
+                                raise
                             break
                         continue
 
-            # Wait for background task to complete
-            future.result()
+            # Wait for background task to complete and check for exceptions
+            # This ensures we catch any exceptions that occurred after sentinel
+            try:
+                future.result()
+            except Exception as e:
+                logger.error(f"Final exception check in run_with_yield: {type(e).__name__}: {e}")
+                raise
