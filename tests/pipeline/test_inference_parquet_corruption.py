@@ -79,8 +79,8 @@ def test_parquet_corruption_with_chunking():
             for i in range(num_docs)
         ]
 
-        def query_builder(runner, document):
-            return {
+        async def rollout_fn(document, generate):
+            result = await generate({
                 "messages": [
                     {
                         "role": "user",
@@ -88,14 +88,15 @@ def test_parquet_corruption_with_chunking():
                     }
                 ],
                 "max_tokens": 100,
-            }
+            })
+            return result
 
         config = InferenceConfig(
             server_type="dummy",
             model_name_or_path="test-model",
-            temperature=0.0,
-            max_concurrent_requests=2,  # Low to ensure sequential processing
-            max_concurrent_tasks=2,
+            default_generation_params={"temperature": 0.0},
+            max_concurrent_generations=2,  # Low to ensure sequential processing
+            max_concurrent_documents=2,
             metric_interval=120,
         )
 
@@ -103,7 +104,7 @@ def test_parquet_corruption_with_chunking():
             pipeline=[
                 documents,
                 InferenceRunner(
-                    query_builder=query_builder,
+                    rollout_fn=rollout_fn,
                     config=config,
                     records_per_chunk=records_per_chunk,
                     checkpoints_local_dir=str(checkpoint_path),
@@ -201,8 +202,8 @@ def test_parquet_corruption_with_batch_size():
             for i in range(num_docs)
         ]
 
-        def query_builder(runner, document):
-            return {
+        async def rollout_fn(document, generate):
+            result = await generate({
                 "messages": [
                     {
                         "role": "user",
@@ -210,14 +211,15 @@ def test_parquet_corruption_with_batch_size():
                     }
                 ],
                 "max_tokens": 100,
-            }
+            })
+            return result
 
         config = InferenceConfig(
             server_type="dummy",
             model_name_or_path="test-model",
-            temperature=0.0,
-            max_concurrent_requests=2,
-            max_concurrent_tasks=2,
+            default_generation_params={"temperature": 0.0},
+            max_concurrent_generations=2,
+            max_concurrent_documents=2,
             metric_interval=120,
         )
 
@@ -225,7 +227,7 @@ def test_parquet_corruption_with_batch_size():
             pipeline=[
                 documents,
                 InferenceRunner(
-                    query_builder=query_builder,
+                    rollout_fn=rollout_fn,
                     config=config,
                     records_per_chunk=records_per_chunk,
                     checkpoints_local_dir=str(checkpoint_path),
@@ -274,8 +276,8 @@ def test_parquet_file_split_by_size():
             for i in range(num_docs)
         ]
 
-        def query_builder(runner, document):
-            return {
+        async def rollout_fn(document, generate):
+            result = await generate({
                 "messages": [
                     {
                         "role": "user",
@@ -283,14 +285,15 @@ def test_parquet_file_split_by_size():
                     }
                 ],
                 "max_tokens": 100,
-            }
+            })
+            return result
 
         config = InferenceConfig(
             server_type="dummy",
             model_name_or_path="test-model",
-            temperature=0.0,
-            max_concurrent_requests=2,
-            max_concurrent_tasks=2,
+            default_generation_params={"temperature": 0.0},
+            max_concurrent_generations=2,
+            max_concurrent_documents=2,
             metric_interval=120,
         )
 
@@ -298,7 +301,7 @@ def test_parquet_file_split_by_size():
             pipeline=[
                 documents,
                 InferenceRunner(
-                    query_builder=query_builder,
+                    rollout_fn=rollout_fn,
                     config=config,
                     records_per_chunk=records_per_chunk,
                     checkpoints_local_dir=str(checkpoint_path),

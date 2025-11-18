@@ -20,9 +20,9 @@ class VLLMRemoteServer(RemoteInferenceServer):
 
     Example:
         config = InferenceConfig(
-            server_type="vllm-remote",
+            server_type="endpoint",
             model_name_or_path="meta-llama/Llama-3-8B",
-            external_endpoint="http://my-vllm-server.com:8000"
+            endpoint_url="http://my-vllm-server.com:8000"
         )
         server = VLLMRemoteServer(config)
     """
@@ -32,16 +32,16 @@ class VLLMRemoteServer(RemoteInferenceServer):
         Initialize remote vLLM server connector.
 
         Args:
-            config: InferenceConfig with external_endpoint specified
+            config: InferenceConfig with endpoint_url specified
 
         Raises:
-            ValueError: If external_endpoint is not provided
+            ValueError: If endpoint_url is not provided
         """
-        if not config.external_endpoint:
+        if not config.endpoint_url:
             raise ValueError(
-                "external_endpoint is required for vllm-remote server type. "
+                "endpoint_url is required for remote server connection. "
                 "Please provide the URL of your remote vLLM server, e.g., "
                 "'http://my-server.com:8000'"
             )
 
-        super().__init__(config, endpoint=config.external_endpoint)
+        super().__init__(config, endpoint=config.endpoint_url)

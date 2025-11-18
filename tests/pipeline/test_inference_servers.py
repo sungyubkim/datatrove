@@ -20,9 +20,9 @@ class TestRemoteInferenceServerBase:
     def test_extract_port_with_explicit_http_port(self):
         """Test port extraction from HTTP URL with explicit port."""
         config = InferenceConfig(
-            server_type="vllm-remote",
+            server_type="endpoint",
             model_name_or_path="test-model",
-            external_endpoint="http://localhost:8000",
+            endpoint_url="http://localhost:8000",
         )
 
         class TestRemoteServer(RemoteInferenceServer):
@@ -34,9 +34,9 @@ class TestRemoteInferenceServerBase:
     def test_extract_port_with_explicit_https_port(self):
         """Test port extraction from HTTPS URL with explicit port."""
         config = InferenceConfig(
-            server_type="vllm-remote",
+            server_type="endpoint",
             model_name_or_path="test-model",
-            external_endpoint="https://api.service.com:9000",
+            endpoint_url="https://api.service.com:9000",
         )
 
         class TestRemoteServer(RemoteInferenceServer):
@@ -48,9 +48,9 @@ class TestRemoteInferenceServerBase:
     def test_extract_port_default_http(self):
         """Test default port (80) for HTTP URLs without explicit port."""
         config = InferenceConfig(
-            server_type="vllm-remote",
+            server_type="endpoint",
             model_name_or_path="test-model",
-            external_endpoint="http://service.com",
+            endpoint_url="http://service.com",
         )
 
         class TestRemoteServer(RemoteInferenceServer):
@@ -62,9 +62,9 @@ class TestRemoteInferenceServerBase:
     def test_extract_port_default_https(self):
         """Test default port (443) for HTTPS URLs without explicit port."""
         config = InferenceConfig(
-            server_type="vllm-remote",
+            server_type="endpoint",
             model_name_or_path="test-model",
-            external_endpoint="https://api.service.com",
+            endpoint_url="https://api.service.com",
         )
 
         class TestRemoteServer(RemoteInferenceServer):
@@ -76,9 +76,9 @@ class TestRemoteInferenceServerBase:
     def test_endpoint_trailing_slash_removed(self):
         """Test that trailing slash is removed from endpoint."""
         config = InferenceConfig(
-            server_type="vllm-remote",
+            server_type="endpoint",
             model_name_or_path="test-model",
-            external_endpoint="http://localhost:8000/",
+            endpoint_url="http://localhost:8000/",
         )
 
         class TestRemoteServer(RemoteInferenceServer):
@@ -91,9 +91,9 @@ class TestRemoteInferenceServerBase:
     async def test_is_ready_success(self):
         """Test is_ready returns True when server responds successfully."""
         config = InferenceConfig(
-            server_type="vllm-remote",
+            server_type="endpoint",
             model_name_or_path="test-model",
-            external_endpoint="http://localhost:8000",
+            endpoint_url="http://localhost:8000",
         )
 
         class TestRemoteServer(RemoteInferenceServer):
@@ -118,9 +118,9 @@ class TestRemoteInferenceServerBase:
     async def test_is_ready_failure_non_200(self):
         """Test is_ready returns False when server returns non-200 status."""
         config = InferenceConfig(
-            server_type="vllm-remote",
+            server_type="endpoint",
             model_name_or_path="test-model",
-            external_endpoint="http://localhost:8000",
+            endpoint_url="http://localhost:8000",
         )
 
         class TestRemoteServer(RemoteInferenceServer):
@@ -143,9 +143,9 @@ class TestRemoteInferenceServerBase:
     async def test_is_ready_failure_exception(self):
         """Test is_ready returns False when connection fails."""
         config = InferenceConfig(
-            server_type="vllm-remote",
+            server_type="endpoint",
             model_name_or_path="test-model",
-            external_endpoint="http://localhost:8000",
+            endpoint_url="http://localhost:8000",
         )
 
         class TestRemoteServer(RemoteInferenceServer):
@@ -166,9 +166,9 @@ class TestRemoteInferenceServerBase:
     async def test_wait_until_ready_success(self):
         """Test wait_until_ready succeeds when server becomes ready."""
         config = InferenceConfig(
-            server_type="vllm-remote",
+            server_type="endpoint",
             model_name_or_path="test-model",
-            external_endpoint="http://localhost:8000",
+            endpoint_url="http://localhost:8000",
         )
 
         class TestRemoteServer(RemoteInferenceServer):
@@ -189,9 +189,9 @@ class TestRemoteInferenceServerBase:
     async def test_wait_until_ready_timeout(self):
         """Test wait_until_ready raises exception on timeout."""
         config = InferenceConfig(
-            server_type="vllm-remote",
+            server_type="endpoint",
             model_name_or_path="test-model",
-            external_endpoint="http://localhost:8000",
+            endpoint_url="http://localhost:8000",
         )
 
         class TestRemoteServer(RemoteInferenceServer):
@@ -212,9 +212,9 @@ class TestRemoteInferenceServerBase:
     def test_cancel_is_noop(self):
         """Test that cancel() is a no-op for remote servers."""
         config = InferenceConfig(
-            server_type="vllm-remote",
+            server_type="endpoint",
             model_name_or_path="test-model",
-            external_endpoint="http://localhost:8000",
+            endpoint_url="http://localhost:8000",
         )
 
         class TestRemoteServer(RemoteInferenceServer):
@@ -230,22 +230,22 @@ class TestVLLMRemoteServer:
     """Tests for VLLMRemoteServer implementation."""
 
     def test_init_without_endpoint_raises_error(self):
-        """Test that VLLMRemoteServer raises ValueError without external_endpoint."""
+        """Test that VLLMRemoteServer raises ValueError without endpoint_url."""
         config = InferenceConfig(
-            server_type="vllm-remote",
+            server_type="endpoint",
             model_name_or_path="test-model",
-            # external_endpoint not provided
+            # endpoint_url not provided
         )
 
-        with pytest.raises(ValueError, match="external_endpoint is required"):
+        with pytest.raises(ValueError, match="endpoint_url is required"):
             VLLMRemoteServer(config)
 
     def test_init_with_endpoint_succeeds(self):
         """Test successful initialization with external_endpoint."""
         config = InferenceConfig(
-            server_type="vllm-remote",
+            server_type="endpoint",
             model_name_or_path="test-model",
-            external_endpoint="http://my-vllm-server.com:8000",
+            endpoint_url="http://my-vllm-server.com:8000",
         )
 
         server = VLLMRemoteServer(config)
@@ -257,9 +257,9 @@ class TestVLLMRemoteServer:
     def test_port_extracted_correctly(self):
         """Test that port is correctly extracted from endpoint URL."""
         config = InferenceConfig(
-            server_type="vllm-remote",
+            server_type="endpoint",
             model_name_or_path="test-model",
-            external_endpoint="http://localhost:9999",
+            endpoint_url="http://localhost:9999",
         )
 
         server = VLLMRemoteServer(config)
@@ -269,9 +269,9 @@ class TestVLLMRemoteServer:
     def test_https_endpoint(self):
         """Test initialization with HTTPS endpoint."""
         config = InferenceConfig(
-            server_type="vllm-remote",
+            server_type="endpoint",
             model_name_or_path="test-model",
-            external_endpoint="https://secure-api.com:443",
+            endpoint_url="https://secure-api.com:443",
         )
 
         server = VLLMRemoteServer(config)
@@ -282,9 +282,9 @@ class TestVLLMRemoteServer:
     def test_default_https_port(self):
         """Test that HTTPS URLs without explicit port default to 443."""
         config = InferenceConfig(
-            server_type="vllm-remote",
+            server_type="endpoint",
             model_name_or_path="test-model",
-            external_endpoint="https://api.example.com",
+            endpoint_url="https://api.example.com",
         )
 
         server = VLLMRemoteServer(config)

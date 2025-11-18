@@ -13,11 +13,8 @@ from pathlib import Path
 import pytest
 
 from datatrove.data import Document
-from datatrove.pipeline.inference.run_inference import (
-    CheckpointManager,
-    InferenceConfig,
-    InferenceRunner,
-)
+from datatrove.pipeline.inference.checkpointing import CheckpointManager
+from datatrove.pipeline.inference.run_inference import InferenceConfig, InferenceRunner
 from datatrove.pipeline.writers import ParquetWriter
 
 
