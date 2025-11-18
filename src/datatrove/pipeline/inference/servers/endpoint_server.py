@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from datatrove.pipeline.inference.servers.base import InferenceServer
+from datatrove.pipeline.inference.servers.remote_base import RemoteInferenceServer
 from datatrove.utils._import_utils import check_required_dependencies
 
 
@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from datatrove.pipeline.inference.run_inference import InferenceConfig
 
 
-class EndpointServer(InferenceServer):
+class EndpointServer(RemoteInferenceServer):
     """Inference server that sends requests to an external endpoint URL using OpenAI-compatible API."""
 
     def __init__(self, config: "InferenceConfig"):
@@ -19,9 +19,11 @@ class EndpointServer(InferenceServer):
             config: InferenceConfig containing all server configuration parameters.
                 Must have endpoint_url set.
         """
-        super().__init__(config)
         if not hasattr(config, "endpoint_url") or config.endpoint_url is None:
             raise ValueError("endpoint_url must be provided in InferenceConfig for EndpointServer")
+
+        # Initialize parent with endpoint
+        super().__init__(config, config.endpoint_url)
         self.endpoint_url = config.endpoint_url
 
         # Check if we need the OpenAI client (not needed for localhost HTTP endpoints)
@@ -52,7 +54,8 @@ class EndpointServer(InferenceServer):
 
     def get_base_url(self) -> str:
         """Get the base URL for making requests."""
-        return self.endpoint_url.rstrip("/")
+        # Use the endpoint from parent RemoteInferenceServer
+        return self.endpoint
 
     async def _make_request(self, payload: dict) -> dict:
         """
