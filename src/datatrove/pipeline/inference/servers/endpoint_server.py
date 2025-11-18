@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from datatrove.pipeline.inference.servers.remote_base import RemoteInferenceServer
+from datatrove.pipeline.inference.servers.base import InferenceServer
 from datatrove.utils._import_utils import check_required_dependencies
 
 
@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from datatrove.pipeline.inference.run_inference import InferenceConfig
 
 
-class EndpointServer(RemoteInferenceServer):
+class EndpointServer(InferenceServer):
     """Inference server that sends requests to an external endpoint URL using OpenAI-compatible API."""
 
     def __init__(self, config: "InferenceConfig"):
@@ -19,11 +19,9 @@ class EndpointServer(RemoteInferenceServer):
             config: InferenceConfig containing all server configuration parameters.
                 Must have endpoint_url set.
         """
+        super().__init__(config)
         if not hasattr(config, "endpoint_url") or config.endpoint_url is None:
             raise ValueError("endpoint_url must be provided in InferenceConfig for EndpointServer")
-
-        # Initialize parent with endpoint
-        super().__init__(config, config.endpoint_url)
         self.endpoint_url = config.endpoint_url
 
         # Check if we need the OpenAI client (not needed for localhost HTTP endpoints)
@@ -52,10 +50,30 @@ class EndpointServer(RemoteInferenceServer):
         """Wait until the endpoint is ready. Uses shorter delays since we're just checking endpoint availability."""
         await super().wait_until_ready(max_attempts=max_attempts, delay_sec=delay_sec)
 
+    async def is_ready(self) -> bool:
+        """
+        Check if the endpoint server is ready to accept requests.
+
+        Performs a health check by calling the /v1/models endpoint.
+
+        Returns:
+            True if server responds successfully, False otherwise
+        """
+        import httpx
+        from loguru import logger
+
+        url = f"{self.endpoint_url}/v1/models"
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, timeout=5.0)
+                return response.status_code == 200
+        except Exception as e:
+            logger.debug(f"Endpoint server health check failed: {e}")
+            return False
+
     def get_base_url(self) -> str:
         """Get the base URL for making requests."""
-        # Use the endpoint from parent RemoteInferenceServer
-        return self.endpoint
+        return self.endpoint_url.rstrip("/")
 
     async def _make_request(self, payload: dict) -> dict:
         """
