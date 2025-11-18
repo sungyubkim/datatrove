@@ -836,74 +836,60 @@ def test_shared_context_callable_returns_context_manager(tmp_path):
     assert cleanup_called["called"], "Context manager cleanup should have been called (direct version)"
 
 
-@pytest.mark.skip(reason="EndpointServer missing is_ready() implementation - upstream bug")
 def test_endpoint_server(tmp_path):
-    """Test EndpointServer with a mock HTTP server."""
+    """Test EndpointServer with Ollama server (requires Ollama running on localhost:11434)."""
+    pytest.importorskip("httpx")  # Required for EndpointServer.is_ready()
+
     output_dir = tmp_path / "endpoint_test"
-    documents = [Document(text="hello endpoint", id="endpoint-1")]
+    documents = [Document(text="Write a haiku about coding", id="endpoint-1")]
 
-    # Find an available port
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        port = s.getsockname()[1]
-
-    # Start a simple HTTP server with DummyHandler
-    server = HTTPServer(("localhost", port), DummyHandler)
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-    # Give the server a moment to start
-    asyncio.run(asyncio.sleep(0.1))
-
-    try:
-
-        async def endpoint_rollout(document, generate):
-            result = await generate(
-                {
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": [{"type": "text", "text": document.text}],
-                        }
-                    ],
-                    "max_tokens": 100,
-                }
-            )
-            return {
-                "text": result.text,
-                "finish_reason": result.finish_reason,
-                "usage": result.usage,
+    async def endpoint_rollout(document, generate):
+        result = await generate(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": document.text}],
+                    }
+                ],
+                "max_tokens": 100,
             }
-
-        config = InferenceConfig(
-            server_type="dummy",
-            model_name_or_path="test-model",
-            model_max_context=2048,
-            metric_interval=60,
-            rollouts_per_document=1,
-            max_concurrent_generations=1,
-            max_concurrent_documents=None,
         )
+        return {
+            "text": result.text,
+            "finish_reason": result.finish_reason,
+            "usage": result.usage,
+        }
 
-        runner = InferenceRunner(
-            rollout_fn=endpoint_rollout,
-            config=config,
-            output_writer=JsonlWriter(str(output_dir), output_filename="${rank}.jsonl", compression=None),
-        )
+    config = InferenceConfig(
+        server_type="endpoint",  # Use EndpointServer instead of DummyServer
+        endpoint_url="http://localhost:11434",  # Ollama base URL (is_ready adds /v1/models)
+        model_name_or_path="gemma3:4b-it-qat",  # Ollama model name
+        model_max_context=2048,
+        metric_interval=60,
+        rollouts_per_document=1,
+        max_concurrent_generations=1,
+        max_concurrent_documents=None,
+    )
 
-        asyncio.run(runner.run_async(documents, rank=0))
+    runner = InferenceRunner(
+        rollout_fn=endpoint_rollout,
+        config=config,
+        output_writer=JsonlWriter(str(output_dir), output_filename="${rank}.jsonl", compression=None),
+    )
 
-        doc = documents[0]
-        assert "rollout_results" in doc.metadata
-        assert len(doc.metadata["rollout_results"]) == 1
-        assert "text" in doc.metadata["rollout_results"][0]
+    asyncio.run(runner.run_async(documents, rank=0))
 
-        output_file = output_dir / "00000.jsonl"
-        assert output_file.exists()
-        saved = json.loads(output_file.read_text().strip())
-        assert saved["metadata"]["rollout_results"][0]["text"] == doc.metadata["rollout_results"][0]["text"]
-    finally:
-        server.shutdown()
-        server.server_close()
+    doc = documents[0]
+    assert "rollout_results" in doc.metadata
+    assert len(doc.metadata["rollout_results"]) == 1
+    assert "text" in doc.metadata["rollout_results"][0]
+    assert len(doc.metadata["rollout_results"][0]["text"]) > 0  # Should have generated text
+
+    output_file = output_dir / "00000.jsonl"
+    assert output_file.exists()
+    saved = json.loads(output_file.read_text().strip())
+    assert saved["metadata"]["rollout_results"][0]["text"] == doc.metadata["rollout_results"][0]["text"]
 
 
 def test_rollout_fn_graceful_inference_error_handling(tmp_path):

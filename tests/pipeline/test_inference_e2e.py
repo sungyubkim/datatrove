@@ -124,7 +124,7 @@ async def test_ollama_basic_inference():
 
         config = InferenceConfig(
             server_type="endpoint",  # Use "endpoint" for Ollama
-            model_name_or_path="qwen3:0.6b",  # Your Ollama model
+            model_name_or_path="gemma3:4b-it-qat",  # Your Ollama model
             endpoint_url="http://localhost:11434",  # Ollama base URL (is_ready() will append /v1/models)
             model_max_context=4096,
             use_chat=True,
@@ -443,7 +443,7 @@ async def test_ollama_with_sandbox_e2e():
 
         config = InferenceConfig(
             server_type="endpoint",
-            model_name_or_path="qwen3:0.6b",
+            model_name_or_path="gemma3:4b-it-qat",
             endpoint_url="http://localhost:11434",  # Ollama base URL
             model_max_context=4096,
             use_chat=True,
