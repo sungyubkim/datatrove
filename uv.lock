@@ -224,6 +224,18 @@ wheels = [
 ]
 
 [[package]]
+name = "aiosqlite"
+version = "0.21.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/13/7d/8bca2bf9a247c2c5dfeec1d7a5f40db6518f88d314b8bca9da29670d2671/aiosqlite-0.21.0.tar.gz", hash = "sha256:131bb8056daa3bc875608c631c678cda73922a2d4ba8aec373b19f18c17e7aa3", size = 13454, upload_time = "2025-02-03T07:30:16.235Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f5/10/6c25ed6de94c49f88a91fa5018cb4c0f3625f31d5be9f771ebe5cc7cd506/aiosqlite-0.21.0-py3-none-any.whl", hash = "sha256:2549cf4057f95f53dcba16f2b64e8e2791d7e1adedb13197dd8ed77bb226d7d0", size = 15792, upload_time = "2025-02-03T07:30:13.6Z" },
+]
+
+[[package]]
 name = "alabaster"
 version = "1.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -882,6 +894,7 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "aiofiles" },
+    { name = "aiosqlite" },
     { name = "botok" },
     { name = "datasets" },
     { name = "fasteners" },
@@ -893,7 +906,6 @@ all = [
     { name = "indic-nlp-library" },
     { name = "inscriptis" },
     { name = "jieba" },
-    { name = "kenlm" },
     { name = "khmer-nltk" },
     { name = "kiwipiepy" },
     { name = "laonlp" },
@@ -933,6 +945,7 @@ decont = [
 ]
 dev = [
     { name = "aiofiles" },
+    { name = "aiosqlite" },
     { name = "botok" },
     { name = "datasets" },
     { name = "fasteners" },
@@ -944,7 +957,6 @@ dev = [
     { name = "indic-nlp-library" },
     { name = "inscriptis" },
     { name = "jieba" },
-    { name = "kenlm" },
     { name = "khmer-nltk" },
     { name = "kiwipiepy" },
     { name = "laonlp" },
@@ -978,6 +990,7 @@ dev = [
 ]
 inference = [
     { name = "aiofiles" },
+    { name = "aiosqlite" },
     { name = "httpx" },
     { name = "orjson" },
 ]
@@ -1010,7 +1023,6 @@ processing = [
     { name = "fasttext-numpy2-wheel" },
     { name = "ftfy" },
     { name = "inscriptis" },
-    { name = "kenlm" },
     { name = "nltk" },
     { name = "pyahocorasick" },
     { name = "regex" },
@@ -1041,6 +1053,7 @@ s3 = [
 ]
 testing = [
     { name = "aiofiles" },
+    { name = "aiosqlite" },
     { name = "botok" },
     { name = "datasets" },
     { name = "fasteners" },
@@ -1052,7 +1065,6 @@ testing = [
     { name = "indic-nlp-library" },
     { name = "inscriptis" },
     { name = "jieba" },
-    { name = "kenlm" },
     { name = "khmer-nltk" },
     { name = "kiwipiepy" },
     { name = "laonlp" },
@@ -1087,6 +1099,7 @@ testing = [
 [package.metadata]
 requires-dist = [
     { name = "aiofiles", marker = "extra == 'inference'" },
+    { name = "aiosqlite", marker = "extra == 'inference'" },
     { name = "botok", marker = "extra == 'multilingual'" },
     { name = "datasets", specifier = ">=4.3.0" },
     { name = "datasets", marker = "extra == 'io'", specifier = ">=3.1.0" },
@@ -1114,9 +1127,8 @@ requires-dist = [
     { name = "indic-nlp-library", marker = "extra == 'multilingual'" },
     { name = "inscriptis", marker = "extra == 'processing'" },
     { name = "jieba", marker = "extra == 'multilingual'" },
-    { name = "kenlm", marker = "extra == 'processing'" },
     { name = "khmer-nltk", marker = "extra == 'multilingual'" },
-    { name = "kiwipiepy", marker = "extra == 'multilingual'" },
+    { name = "kiwipiepy", marker = "extra == 'multilingual'", specifier = "<0.22.0" },
     { name = "langdetect", marker = "extra == 'reward-scoring'" },
     { name = "laonlp", marker = "extra == 'multilingual'" },
     { name = "lighteval", marker = "extra == 'decont'", specifier = ">=0.3.0" },
@@ -2013,12 +2025,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/49/f3/45890c1b314f0d04e
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f2/ac/52f4e86d1924a7fc05af3aeb34488570eccc39b4af90530dd6acecdf16b5/justext-3.0.2-py2.py3-none-any.whl", hash = "sha256:62b1c562b15c3c6265e121cc070874243a443bfd53060e869393f09d6b6cc9a7", size = 837940, upload_time = "2025-02-25T20:21:44.179Z" },
 ]
-
-[[package]]
-name = "kenlm"
-version = "0.3.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/02/6e/f4e159cef39ea4ef2244b4aa32857d447d60a5d0ee269e1b1f8d3723c03e/kenlm-0.3.0.tar.gz", hash = "sha256:c4628bb9fb63c8a6f9240035b8b037385cfc404cb72e933cf48878291edac1e8", size = 427500, upload_time = "2025-04-07T13:26:38.795Z" }
 
 [[package]]
 name = "keras"
