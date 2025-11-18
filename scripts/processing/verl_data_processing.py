@@ -46,13 +46,13 @@ Usage Examples:
         --sandbox-fusion-url http://localhost:5000 \\
         --max-concurrent-scoring 20
 
-    # Remote vLLM server with custom settings
+    # Remote endpoint server with custom settings
     python scripts/processing/verl_data_processing.py \\
         --input-data data/large-dataset \\
         --output-dir output/remote-processed \\
         --model-name-or-path meta-llama/Llama-3-70B \\
-        --inference-server-type vllm-remote \\
-        --remote-vllm-endpoint http://vllm-cluster:8000 \\
+        --inference-server-type endpoint \\
+        --endpoint-url http://vllm-cluster:8000 \\
         --num-responses-per-prompt 15 \\
         --max-concurrent-inference 200
 
@@ -721,13 +721,13 @@ def build_pipeline(args):
         InferenceRunner(
             rollout_fn=rollout_fn,  # Unified function (replaces query_builder + postprocess_fn)
             config=InferenceConfig(
-                server_type="endpoint" if args.inference_server_type == "vllm-remote" else args.inference_server_type,
+                server_type=args.inference_server_type,
                 model_name_or_path=args.model_name_or_path,
                 default_generation_params={"temperature": args.sampling_temperature},  # Dict format
                 max_concurrent_generations=args.max_concurrent_inference,  # Renamed
                 max_concurrent_documents=100,  # Renamed (reduced to prevent thread pool exhaustion)
                 metric_interval=120,  # Report metrics every 2 minutes
-                endpoint_url=args.remote_vllm_endpoint if args.inference_server_type == "vllm-remote" else None,
+                endpoint_url=args.endpoint_url,
             ),
             output_writer=ParquetWriter(
                 output_folder=args.output_dir,
@@ -842,15 +842,15 @@ For details: examples/verl_data_processing.py
     server.add_argument(
         '--inference-server-type',
         type=str,
-        choices=['vllm', 'sglang', 'vllm-remote'],
+        choices=['vllm', 'sglang', 'endpoint'],
         default='vllm',
         help='Type of inference server to use (default: vllm)'
     )
     server.add_argument(
-        '--remote-vllm-endpoint',
+        '--endpoint-url',
         type=str,
         metavar='URL',
-        help='Remote vLLM server endpoint URL (required when --inference-server-type=vllm-remote)'
+        help='Remote endpoint URL (required when --inference-server-type=endpoint)'
     )
     server.add_argument(
         '--max-concurrent-inference',
@@ -969,8 +969,8 @@ For details: examples/verl_data_processing.py
     args = parser.parse_args()
 
     # Validation
-    if args.inference_server_type == 'vllm-remote' and not args.remote_vllm_endpoint:
-        parser.error('--remote-vllm-endpoint is required when --inference-server-type=vllm-remote')
+    if args.inference_server_type == 'endpoint' and not args.endpoint_url:
+        parser.error('--endpoint-url is required when --inference-server-type=endpoint')
 
     # Create output directories if they don't exist
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)

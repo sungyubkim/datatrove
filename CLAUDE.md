@@ -123,24 +123,24 @@ All blocks in `src/datatrove/pipeline/`:
 - `DocumentTokenizer`: Tokenize and save tokens
 
 **Inference** (`inference/`): Run LLM inference for synthetic data
-- `InferenceRunner`: Supports vLLM, SGLang, and remote vLLM endpoints
+- `InferenceRunner`: Supports vLLM, SGLang, and remote endpoints
   - **Local servers** (`server_type="vllm"` or `"sglang"`): Automatically spawns and manages server processes
-  - **Remote servers** (`server_type="vllm-remote"`): Connects to existing external vLLM endpoints
+  - **Remote servers** (`server_type="endpoint"`): Connects to existing external endpoints
 - Automatic checkpointing via `checkpoints_local_dir` and `records_per_chunk`
 - Server architecture:
   - `LocalInferenceServer`: Base for local server management (process spawning, port finding, logging)
   - `RemoteInferenceServer`: Base for external endpoint connections (health checks, no process management)
 
-**Using External vLLM Server:**
+**Using External Endpoint:**
 ```python
 from datatrove.pipeline.inference import InferenceRunner, InferenceConfig
 from datatrove.pipeline.writers import JsonlWriter
 
-# Connect to an existing vLLM server instead of spawning a local one
+# Connect to an existing inference endpoint instead of spawning a local one
 config = InferenceConfig(
-    server_type="vllm-remote",
+    server_type="endpoint",
     model_name_or_path="meta-llama/Llama-3-8B",
-    external_endpoint="http://my-vllm-server.com:8000",  # Required for vllm-remote
+    endpoint_url="http://my-vllm-server.com:8000",  # Required for endpoint
     temperature=0.7,
     max_concurrent_requests=100,
 )

@@ -113,10 +113,10 @@ echo ""
 
 
 # ==============================================================================
-# Example 4: Remote vLLM Server
+# Example 4: Remote Endpoint Server
 # ==============================================================================
-# Use external vLLM server instead of spawning local one
-echo "=== Example 4: Remote vLLM Server ==="
+# Use external inference endpoint instead of spawning local one
+echo "=== Example 4: Remote Endpoint Server ==="
 echo ""
 echo "Command:"
 cat << 'EOF'
@@ -124,21 +124,21 @@ python scripts/processing/verl_data_processing.py \
     --input-data data/large-dataset.parquet \
     --output-dir output/remote-processed \
     --model-name-or-path meta-llama/Llama-3-70B \
-    --inference-server-type vllm-remote \
-    --remote-vllm-endpoint http://vllm-cluster.example.com:8000 \
+    --inference-server-type endpoint \
+    --endpoint-url http://vllm-cluster.example.com:8000 \
     --num-responses-per-prompt 15 \
     --max-concurrent-inference 200
 EOF
 echo ""
 echo "This will:"
-echo "  - Connect to external vLLM server (no local GPU required)"
+echo "  - Connect to external inference endpoint (no local GPU required)"
 echo "  - Use large 70B model running on remote cluster"
 echo "  - Generate 15 responses per prompt"
 echo "  - Allow 200 concurrent inference requests (high throughput)"
 echo ""
 echo "Use case:"
 echo "  - Processing on machine without GPU"
-echo "  - Using centralized vLLM cluster for multiple users"
+echo "  - Using centralized inference cluster for multiple users"
 echo "  - Large models that don't fit on local GPU"
 echo ""
 # Uncomment to run:
@@ -146,8 +146,8 @@ echo ""
 #     --input-data data/large-dataset.parquet \
 #     --output-dir output/remote-processed \
 #     --model-name-or-path meta-llama/Llama-3-70B \
-#     --inference-server-type vllm-remote \
-#     --remote-vllm-endpoint http://vllm-cluster.example.com:8000 \
+#     --inference-server-type endpoint \
+#     --endpoint-url http://vllm-cluster.example.com:8000 \
 #     --num-responses-per-prompt 15 \
 #     --max-concurrent-inference 200
 

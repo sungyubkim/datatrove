@@ -413,13 +413,13 @@ python scripts/processing/verl_data_processing.py \
     --sandbox-fusion-url http://localhost:5000 \
     --max-concurrent-scoring 20
 
-# Remote vLLM server with custom settings
+# Remote endpoint server with custom settings
 python scripts/processing/verl_data_processing.py \
     --input-data data/large-dataset \
     --output-dir output/remote \
     --model-name-or-path meta-llama/Llama-3-70B \
-    --inference-server-type vllm-remote \
-    --remote-vllm-endpoint http://vllm-cluster:8000 \
+    --inference-server-type endpoint \
+    --endpoint-url http://vllm-cluster:8000 \
     --num-responses-per-prompt 15
 
 # Production settings (high parallelism)
@@ -441,8 +441,8 @@ python scripts/processing/verl_data_processing.py \
 - `--num-responses-per-prompt INT`: Responses per prompt (default: 10)
 - `--sampling-temperature FLOAT`: Temperature for diversity (default: 0.7)
 - `--max-tokens-per-response INT`: Max tokens (default: 2048)
-- `--inference-server-type {vllm,sglang,vllm-remote}`: Server type (default: vllm)
-- `--remote-vllm-endpoint URL`: Remote vLLM URL (for vllm-remote)
+- `--inference-server-type {vllm,sglang,endpoint}`: Server type (default: vllm)
+- `--endpoint-url URL`: Remote endpoint URL (for endpoint)
 - `--sandbox-fusion-url URL`: Sandbox for code scoring (optional)
 - `--num-parallel-tasks INT`: Parallel tasks (default: 10)
 - `--checkpoint-dir PATH`: Checkpoint directory (default: checkpoints/verl)
@@ -452,7 +452,7 @@ python scripts/processing/verl_data_processing.py \
 - Basic math processing
 - Custom generation settings
 - Code execution scoring
-- Remote vLLM usage
+- Remote endpoint usage
 - Production high-parallelism
 - Checkpoint resumption
 - Incremental response generation (append mode)
