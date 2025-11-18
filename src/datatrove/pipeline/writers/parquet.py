@@ -8,6 +8,20 @@ from datatrove.utils.logging import logger
 
 
 class ParquetWriter(DiskWriter):
+    """
+    Writes documents to Parquet files with batching and compression support.
+
+    This writer buffers documents in memory and writes them in batches to Parquet files
+    using PyArrow. It supports compression, schema specification, and file size limits.
+
+    Notes:
+        - This writer is picklable and supports deepcopy operations.
+        - When pickled/deepcopied, active PyArrow writers and buffered batches
+          are not preserved. The copied instance starts with a fresh state.
+        - Configuration (compression, schema, batch_size, etc.) is preserved.
+        - Thread-safe for concurrent write operations within a single process.
+    """
+
     default_output_filename: str = "${rank}.parquet"
     name = "📒 Parquet"
     _requires_dependencies = ["pyarrow"]
@@ -128,3 +142,41 @@ class ParquetWriter(DiskWriter):
             self._batches.clear()
             self._writers.clear()
             super().close()
+
+    def __getstate__(self):
+        """
+        Prepare state for pickling/deepcopy.
+
+        Removes unpicklable components:
+        - _write_lock: threading.Lock cannot be serialized
+        - _writers: PyArrow ParquetWriter instances cannot be serialized
+        - _batches: Cleared to avoid stale data in copied instances
+
+        These will be recreated in __setstate__.
+
+        Returns:
+            dict: Serializable state dictionary
+        """
+        state = self.__dict__.copy()
+        # Remove unpicklable threading lock
+        state['_write_lock'] = None
+        # Remove PyArrow writers (Cython objects, not picklable)
+        state['_writers'] = {}
+        # Clear batches to start fresh
+        state['_batches'] = defaultdict(list)
+        return state
+
+    def __setstate__(self, state):
+        """
+        Restore state after unpickling/deepcopy.
+
+        Recreates the threading lock and initializes empty writer/batch containers.
+        Configuration parameters (compression, schema, batch_size, etc.) are preserved.
+
+        Args:
+            state: State dictionary from __getstate__
+        """
+        self.__dict__.update(state)
+        # Recreate the threading lock
+        self._write_lock = threading.Lock()
+        # _writers and _batches already initialized from state
