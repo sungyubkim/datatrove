@@ -634,12 +634,19 @@ def document_to_verl_adapter(self, document: Document) -> dict:
 # ==============================================================================
 # 6. Pipeline Construction
 # ==============================================================================
-import asyncio
+def build_pipeline():
+    """
+    Build the processing pipeline with properly initialized async components.
 
-# Create semaphore for scoring rate limiting (replaces old max_concurrent_scoring parameter)
-SCORING_SEMAPHORE = asyncio.Semaphore(50)  # Adjust based on sandbox capacity
+    This function must be called AFTER the event loop is created to ensure
+    asyncio.Semaphore is bound to the correct event loop.
+    """
+    import asyncio
 
-pipeline = [
+    # Create semaphore for scoring rate limiting (must be created after event loop exists)
+    scoring_semaphore = asyncio.Semaphore(50)  # Adjust based on sandbox capacity
+
+    return [
     # Step 1: Read VERL parquet data
     ParquetReader(
         data_folder=INPUT_DATA_PATH,
@@ -667,7 +674,7 @@ pipeline = [
             schema=VERL_SCHEMA,  # Explicit schema preserves error fields
         ),
         shared_context={  # NEW: Pass dependencies as kwargs to rollout_fn
-            "scoring_semaphore": SCORING_SEMAPHORE,
+            "scoring_semaphore": scoring_semaphore,  # Created in this function
             "sandbox_url": SANDBOX_FUSION_URL,
         },
         checkpoints_local_dir=CHECKPOINTS_PATH,  # Enable checkpointing
@@ -680,13 +687,27 @@ pipeline = [
     #     output_folder=STATS_PATH,
     #     groups_to_compute=["summary", "histogram"],  # Aggregate + distribution
     # ),
-]
+    ]
 
 
 # ==============================================================================
 # 7. Executor Setup and Execution
 # ==============================================================================
 if __name__ == "__main__":
+    import asyncio
+    import concurrent.futures
+
+    # Configure ThreadPoolExecutor for asyncio.to_thread()
+    # Increase from default (~32) to 2000 to prevent deadlock when
+    # max_concurrent_documents × responses_per_prompt > default thread pool size
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    executor_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2000)
+    loop.set_default_executor(executor_pool)
+
+    # Build pipeline AFTER event loop is created (for proper semaphore binding)
+    pipeline = build_pipeline()
+
     # Local execution with multiprocessing
     executor = LocalPipelineExecutor(
         pipeline=pipeline,

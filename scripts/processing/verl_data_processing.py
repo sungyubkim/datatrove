@@ -741,7 +741,7 @@ def build_pipeline(args):
             checkpoints_local_dir=args.checkpoint_dir,
             records_per_chunk=args.checkpoint_frequency,
             # metadata_key default is "rollout_results" (not used by VERL output adapter)
-        ).run_with_yield,  # Method reference for pipeline chaining
+        ),
     ]
 
     # Optional: Add statistics collection if requested

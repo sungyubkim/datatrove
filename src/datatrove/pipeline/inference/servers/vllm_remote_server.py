@@ -9,18 +9,33 @@ if TYPE_CHECKING:
 
 class VLLMRemoteServer(RemoteInferenceServer):
     """
-    Remote vLLM server connector.
+    Remote vLLM server connector (for direct instantiation only).
 
-    Connects to an existing external vLLM server endpoint instead of spawning
-    a local server process. Useful for:
-    - Connecting to centrally managed vLLM instances
-    - Using vLLM servers on different machines
-    - Sharing vLLM resources across multiple pipeline runs
-    - Avoiding the overhead of starting/stopping servers
+    IMPORTANT: This class is NOT used by InferenceRunner's automatic server selection.
+    When using InferenceRunner, use server_type="endpoint" to connect to remote vLLM servers.
+    This class is provided for advanced users who want to instantiate the server directly.
 
-    Example:
+    The standard way to connect to a remote vLLM server is:
+        InferenceRunner(
+            config=InferenceConfig(
+                server_type="endpoint",  # Use generic endpoint server
+                endpoint_url="http://my-vllm-server.com:8000",
+                ...
+            ),
+            ...
+        )
+
+    This class exists as a vLLM-specific subclass of RemoteInferenceServer for:
+    - Direct instantiation in custom workflows
+    - Testing and validation
+    - Documentation of vLLM-specific remote server usage
+
+    The generic EndpointServer (used when server_type="endpoint") handles all
+    OpenAI-compatible endpoints including vLLM, so this specialized class is
+    typically not needed in production pipelines.
+
+    Example (direct instantiation):
         config = InferenceConfig(
-            server_type="endpoint",
             model_name_or_path="meta-llama/Llama-3-8B",
             endpoint_url="http://my-vllm-server.com:8000"
         )
