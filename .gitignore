@@ -187,3 +187,6 @@ scripts/deduplication/*/data/
 output/
 outputs/
 checkpoints/
+
+# codex
+node_modules/

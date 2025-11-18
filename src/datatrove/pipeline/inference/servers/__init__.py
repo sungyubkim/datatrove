@@ -1,5 +1,6 @@
 from datatrove.pipeline.inference.servers.base import InferenceServer
 from datatrove.pipeline.inference.servers.dummy_server import DummyServer
+from datatrove.pipeline.inference.servers.endpoint_server import EndpointServer
 from datatrove.pipeline.inference.servers.local_base import LocalInferenceServer
 from datatrove.pipeline.inference.servers.remote_base import RemoteInferenceServer
 from datatrove.pipeline.inference.servers.sglang_server import SGLangServer
@@ -15,4 +16,5 @@ __all__ = [
     "VLLMServer",
     "VLLMRemoteServer",
     "DummyServer",
+    "EndpointServer",
 ]
