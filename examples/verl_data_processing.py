@@ -271,24 +271,19 @@ async def verl_rollout_fn(
     sandbox_url: str | None,
 ) -> dict:
     """
-    Unified rollout function: generate N responses, score, and compute statistics.
+    Unified rollout function: generate single response and score it.
 
-    This replaces the old query_builder + postprocess_fn pattern with a single
-    function that handles the entire workflow for VERL data processing.
-
-    This function:
-    1. Generates N responses by calling generate() multiple times
-    2. Scores ALL responses in PARALLEL against ground truth using VERL's compute_score
+    This function is called N times in parallel by InferenceRunner when
+    rollouts_per_document=N is configured. Each invocation:
+    1. Generates SINGLE response via generate() callback
+    2. Scores the response against ground truth using VERL's compute_score
        - Automatically selects appropriate scorer based on data_source
        - Supports math (GSM8K, MATH), code execution, geometry, and QA datasets
-       - Uses asyncio.gather() for concurrent execution
        - Uses scoring_semaphore to prevent overwhelming external services
-    3. Creates unified response objects merging inference results + scores
-       - Each response contains: text, finish_reason, usage, inference_error, is_success,
+    3. Returns unified response object merging inference result + score
+       - Response contains: text, finish_reason, usage, inference_error, is_success,
          score, score_error, reward_think, reward_fmt, reward_correct, reward_length
        - Uses empty strings ("") instead of None for schema consistency (Parquet compatible)
-    4. Computes aggregate statistics (avg, max, success rate, etc.)
-    5. Stores unified_responses in document.metadata for checkpoints and output
 
     Args:
         document: Input document with VERL data in metadata
@@ -297,7 +292,7 @@ async def verl_rollout_fn(
         sandbox_url: Sandbox Fusion URL for code execution scoring (optional)
 
     Returns:
-        Summary dict with processing status (stored in metadata_key by framework)
+        Unified response dict with inference result + score
     """
     import asyncio
 
@@ -306,22 +301,16 @@ async def verl_rollout_fn(
     ground_truth = document.metadata["reward_model"].get("ground_truth", "")
     data_source = document.metadata["data_source"]
 
-    # Read existing responses from previous processing runs (for append behavior)
-    existing_responses = document.metadata.get("extra_info", {}).get("responses", [])
-
-    # 2. Generate N responses by calling generate() multiple times
-    results = []
-    for i in range(N_RESPONSES_PER_PROMPT):
-        try:
-            result = await generate({
-                "messages": original_prompt,  # Chat messages in VERL format
-                "max_tokens": MAX_TOKENS,
-                # temperature is in default_generation_params, no need to pass here
-            })
-            results.append(result)
-        except InferenceError as e:
-            # Store errors alongside successful results
-            results.append(e)
+    # 2. Generate single response
+    try:
+        result = await generate({
+            "messages": original_prompt,  # Chat messages in VERL format
+            "max_tokens": MAX_TOKENS,
+            # temperature is in default_generation_params, no need to pass here
+        })
+    except InferenceError as e:
+        # Store error as result
+        result = e
 
     # Handle different ground truth formats based on dataset type
     # Ground truth is now always a JSON string (converted by input adapter)
@@ -329,136 +318,80 @@ async def verl_rollout_fn(
     if data_source.startswith("searchR1_") and isinstance(ground_truth, str):
         ground_truth = {"target": [ground_truth]}
 
-    # 3. Score all responses in parallel using asyncio.gather()
+    # 3. Score the response with semaphore rate limiting
     # Note: compute_score() now returns normalized scores with consistent schema automatically
-    async def score_single_response(result):
-        """Score a single response with semaphore rate limiting."""
-        if isinstance(result, InferenceResult):
-            try:
-                # Use semaphore to limit concurrent scoring requests
-                async with scoring_semaphore:
-                    # Run synchronous compute_score in thread pool to avoid blocking event loop
-                    score_dict = await asyncio.to_thread(
-                        compute_score,
-                        data_source,
-                        result.text,
-                        ground_truth,
-                        sandbox_fusion_url=sandbox_url,
-                    )
-                return score_dict
-            except Exception as e:
-                # Handle scoring errors - return normalized error score
-                return {
-                    "score": 0.0,
-                    "error": f"Scoring error: {str(e)}",
-                    "reward_think": 0.0,
-                    "reward_fmt": 0.0,
-                    "reward_correct": 0.0,
-                    "reward_length": 0.0,
-                }
-        else:
-            # Failed inference gets zero score with normalized schema
-            error_msg = result.error if hasattr(result, "error") else "unknown"
-            return {
+    if isinstance(result, InferenceResult):
+        try:
+            # Use semaphore to limit concurrent scoring requests
+            async with scoring_semaphore:
+                # Run synchronous compute_score in thread pool to avoid blocking event loop
+                score_dict = await asyncio.to_thread(
+                    compute_score,
+                    data_source,
+                    result.text,
+                    ground_truth,
+                    sandbox_fusion_url=sandbox_url,
+                )
+        except Exception as e:
+            # Handle scoring errors - return normalized error score
+            score_dict = {
                 "score": 0.0,
-                "error": f"Inference error: {error_msg}",
+                "error": f"Scoring error: {str(e)}",
                 "reward_think": 0.0,
                 "reward_fmt": 0.0,
                 "reward_correct": 0.0,
                 "reward_length": 0.0,
             }
-
-    # Score all responses concurrently
-    scores = await asyncio.gather(*[
-        score_single_response(result)
-        for result in results
-    ])
-
-    # 4. Create unified response objects (merge inference results + scores)
-    # This unified structure is stored in checkpoints and used for output
-    unified_responses = []
-    for result, score in zip(results, scores):
-        if isinstance(result, InferenceResult):
-            unified_responses.append(
-                {
-                    # Response fields
-                    "text": result.text,
-                    "finish_reason": result.finish_reason,
-                    "usage": normalize_usage(result.usage),
-                    "inference_error": "",  # Empty string for success (schema consistent)
-                    "is_success": True,
-                    # Score fields
-                    "score": score.get("score", 0.0),
-                    "score_error": score.get("error", ""),
-                    "reward_think": score.get("reward_think", 0.0),
-                    "reward_fmt": score.get("reward_fmt", 0.0),
-                    "reward_correct": score.get("reward_correct", 0.0),
-                    "reward_length": score.get("reward_length", 0.0),
-                }
-            )
-        else:
-            # Failed inference
-            error_msg = result.error if hasattr(result, "error") else "unknown"
-            unified_responses.append(
-                {
-                    # Response fields (use empty strings for None to maintain schema)
-                    "text": "",  # Empty string instead of None (schema consistent)
-                    "finish_reason": "error",
-                    "usage": normalize_usage(None),
-                    "inference_error": error_msg,  # Inference error message
-                    "is_success": False,
-                    # Score fields (0.0 for failed inference)
-                    "score": score.get("score", 0.0),
-                    "score_error": score.get("error", ""),
-                    "reward_think": score.get("reward_think", 0.0),
-                    "reward_fmt": score.get("reward_fmt", 0.0),
-                    "reward_correct": score.get("reward_correct", 0.0),
-                    "reward_length": score.get("reward_length", 0.0),
-                }
-            )
-
-    # 5. Merge existing responses (from previous runs) with new responses (append behavior)
-    # This allows incremental response generation: run 1 generates 10, run 2 adds 10 more = 20 total
-    all_responses = existing_responses + unified_responses
-
-    # 6. Compute aggregate statistics from ALL responses (existing + new)
-    if all_responses:
-        valid_scores = [r["score"] for r in all_responses]
-        # Store ALL responses (used by both checkpoints and output adapter)
-        document.metadata["unified_responses"] = all_responses
-        # Recalculate statistics from ALL responses (not just new ones)
-        document.metadata["avg_score"] = sum(valid_scores) / len(valid_scores)
-        document.metadata["max_score"] = max(valid_scores)
-        document.metadata["min_score"] = min(valid_scores)
-        document.metadata["num_correct"] = sum(
-            int(r["score"] > 0) for r in all_responses
-        )
-        document.metadata["success_rate"] = document.metadata["num_correct"] / len(
-            all_responses
-        )
-        document.metadata["num_responses"] = len(all_responses)
-        document.metadata["num_failed"] = sum(
-            1 for r in all_responses if r["score_error"]
-        )
     else:
-        # No responses generated
-        document.metadata["unified_responses"] = []
-        document.metadata["avg_score"] = 0.0
-        document.metadata["max_score"] = 0.0
-        document.metadata["min_score"] = 0.0
-        document.metadata["num_correct"] = 0
-        document.metadata["success_rate"] = 0.0
-        document.metadata["num_responses"] = 0
-        document.metadata["num_failed"] = 0
+        # Failed inference gets zero score with normalized schema
+        error_msg = result.error if hasattr(result, "error") else "unknown"
+        score_dict = {
+            "score": 0.0,
+            "error": f"Inference error: {error_msg}",
+            "reward_think": 0.0,
+            "reward_fmt": 0.0,
+            "reward_correct": 0.0,
+            "reward_length": 0.0,
+        }
 
-    # 7. Return summary dict (will be stored in doc.metadata[metadata_key])
-    # The actual VERL data is already stored in document.metadata by this function
-    return {
-        "status": "processed",
-        "num_new_responses": len(unified_responses),
-        "num_total_responses": len(all_responses),
-        "avg_score": document.metadata["avg_score"],
-    }
+    # 4. Create unified response object (merge inference result + score)
+    if isinstance(result, InferenceResult):
+        unified_response = {
+            # Response fields
+            "text": result.text,
+            "finish_reason": result.finish_reason,
+            "usage": normalize_usage(result.usage),
+            "inference_error": "",  # Empty string for success (schema consistent)
+            "is_success": True,
+            # Score fields
+            "score": score_dict.get("score", 0.0),
+            "score_error": score_dict.get("error", ""),
+            "reward_think": score_dict.get("reward_think", 0.0),
+            "reward_fmt": score_dict.get("reward_fmt", 0.0),
+            "reward_correct": score_dict.get("reward_correct", 0.0),
+            "reward_length": score_dict.get("reward_length", 0.0),
+        }
+    else:
+        # Failed inference
+        error_msg = result.error if hasattr(result, "error") else "unknown"
+        unified_response = {
+            # Response fields (use empty strings for None to maintain schema)
+            "text": "",  # Empty string instead of None (schema consistent)
+            "finish_reason": "error",
+            "usage": normalize_usage(None),
+            "inference_error": error_msg,  # Inference error message
+            "is_success": False,
+            # Score fields (0.0 for failed inference)
+            "score": score_dict.get("score", 0.0),
+            "score_error": score_dict.get("error", ""),
+            "reward_think": score_dict.get("reward_think", 0.0),
+            "reward_fmt": score_dict.get("reward_fmt", 0.0),
+            "reward_correct": score_dict.get("reward_correct", 0.0),
+            "reward_length": score_dict.get("reward_length", 0.0),
+        }
+
+    # 5. Return unified response (framework will collect N of these in parallel)
+    return unified_response
 
 
 # ==============================================================================
@@ -528,7 +461,7 @@ def document_to_verl_adapter(self, document: Document) -> dict:
             "reward_length": float
         }
     - avg_score, max_score, min_score: Aggregate statistics
-    - success_rate, num_correct, num_responses, num_failed: Success metrics
+    - success_rate, num_correct, num_responses: Success metrics
 
     Args:
         document: Processed document with inference results
@@ -536,84 +469,58 @@ def document_to_verl_adapter(self, document: Document) -> dict:
     Returns:
         Dictionary for parquet row with VERL standard fields only
     """
-    # Check if unified_responses already exists (from postprocess_and_score)
-    unified_responses = document.metadata.get("unified_responses", None)
+    # Get new responses from parallel rollout execution (stored by InferenceRunner framework)
+    # InferenceRunner calls rollout_fn N times and stores results in "rollout_results"
+    new_responses = document.metadata.get("rollout_results", [])
 
-    # If not present, create from separate lists (backward compatibility with old checkpoints)
-    if unified_responses is None:
-        # Extract inference results and scores
-        inference_results = document.metadata.get("inference_results", [])
-        # Reconstruct objects from checkpoint dictionaries
-        inference_results = [
-            reconstruct_inference_result(r) for r in inference_results
-        ]
-        response_scores = document.metadata.get("response_scores", [])
+    # Get existing responses from previous processing runs (for append behavior)
+    # These are stored in extra_info.responses from previous pipeline executions
+    existing_responses = document.metadata.get("extra_info", {}).get("responses", [])
 
-        # Validate that inference results and scores are aligned
-        if len(inference_results) != len(response_scores):
-            raise ValueError(
-                f"Length mismatch: inference_results ({len(inference_results)}) "
-                f"!= response_scores ({len(response_scores)}). "
-                f"Lists must be synchronized."
-            )
+    # Merge existing responses with new responses (append behavior)
+    # This allows incremental response generation: run 1 generates 10, run 2 adds 10 more = 20 total
+    all_responses = existing_responses + new_responses
 
-        # Create unified response objects (merge inference result + score)
-        # All responses have the same fields regardless of success/failure
-        unified_responses = []
-        for result, score in zip(inference_results, response_scores):
-            if isinstance(result, InferenceResult):
-                unified_responses.append(
-                    {
-                        # Response fields
-                        "text": result.text,
-                        "finish_reason": result.finish_reason,
-                        "usage": normalize_usage(result.usage),
-                        "inference_error": "",  # Empty string for success (schema consistent)
-                        "is_success": True,
-                        # Score fields
-                        "score": score.get("score", 0.0),
-                        "score_error": score.get("error", ""),
-                        "reward_think": score.get("reward_think", 0.0),
-                        "reward_fmt": score.get("reward_fmt", 0.0),
-                        "reward_correct": score.get("reward_correct", 0.0),
-                        "reward_length": score.get("reward_length", 0.0),
-                    }
-                )
-            else:
-                unified_responses.append(
-                    {
-                        # Response fields (use empty strings for schema consistency)
-                        "text": "",  # Empty string instead of None (schema consistent)
-                        "finish_reason": "error",
-                        "usage": normalize_usage(None),
-                        "inference_error": result.error
-                        if hasattr(result, "error")
-                        else "unknown",
-                        "is_success": False,
-                        # Score fields (0.0 for failed inference)
-                        "score": score.get("score", 0.0),
-                        "score_error": score.get("error", ""),
-                        "reward_think": score.get("reward_think", 0.0),
-                        "reward_fmt": score.get("reward_fmt", 0.0),
-                        "reward_correct": score.get("reward_correct", 0.0),
-                        "reward_length": score.get("reward_length", 0.0),
-                    }
-                )
+    # Compute aggregate statistics from ALL responses (existing + new)
+    if all_responses:
+        valid_scores = [r["score"] for r in all_responses]
+        avg_score = sum(valid_scores) / len(valid_scores)
+        max_score = max(valid_scores)
+        min_score = min(valid_scores)
+        num_correct = sum(int(r["score"] > 0) for r in all_responses)
+        success_rate = num_correct / len(all_responses)
+        num_responses = len(all_responses)
+    else:
+        # No responses generated
+        avg_score = 0.0
+        max_score = 0.0
+        min_score = 0.0
+        num_correct = 0
+        success_rate = 0.0
+        num_responses = 0
+
+    # Store statistics in document.metadata for stats collector (ResponseScoreStats)
+    # This allows stats collection to work without having to parse extra_info
+    document.metadata["avg_score"] = avg_score
+    document.metadata["max_score"] = max_score
+    document.metadata["min_score"] = min_score
+    document.metadata["success_rate"] = success_rate
+    document.metadata["num_correct"] = num_correct
+    document.metadata["num_responses"] = num_responses
 
     # Copy existing extra_info and add generation results
     extra_info = document.metadata.get("extra_info", {}).copy()
     extra_info.update(
         {
             # Unified responses (single list with both inference + score data)
-            "responses": unified_responses,
-            # Aggregate statistics
-            "avg_score": document.metadata.get("avg_score", 0.0),
-            "max_score": document.metadata.get("max_score", 0.0),
-            "min_score": document.metadata.get("min_score", 0.0),
-            "success_rate": document.metadata.get("success_rate", 0.0),
-            "num_correct": document.metadata.get("num_correct", 0),
-            "num_responses": document.metadata.get("num_responses", 0),
-            "num_failed": document.metadata.get("num_failed", 0),
+            "responses": all_responses,
+            # Aggregate statistics (computed from all_responses above)
+            "avg_score": avg_score,
+            "max_score": max_score,
+            "min_score": min_score,
+            "success_rate": success_rate,
+            "num_correct": num_correct,
+            "num_responses": num_responses,
         }
     )
 
@@ -662,6 +569,7 @@ def build_pipeline():
             server_type="vllm",  # Options: "vllm", "sglang", "endpoint"
             model_name_or_path=MODEL_NAME,
             default_generation_params={"temperature": TEMPERATURE},  # Dict format (was direct param)
+            rollouts_per_document=N_RESPONSES_PER_PROMPT,  # CRITICAL: Enable parallel rollout execution
             max_concurrent_generations=100,  # Renamed from max_concurrent_requests
             max_concurrent_documents=200,  # Renamed from max_concurrent_tasks
             metric_interval=120,  # Report metrics every 2 minutes
