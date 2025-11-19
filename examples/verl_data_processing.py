@@ -606,11 +606,13 @@ if __name__ == "__main__":
     import concurrent.futures
 
     # Configure ThreadPoolExecutor for asyncio.to_thread()
-    # Increase from default (~32) to 2000 to prevent deadlock when
-    # max_concurrent_documents × responses_per_prompt > default thread pool size
+    # Scoring is I/O-bound (waiting on HTTP responses), not CPU-bound
+    # With connection pooling, 200 threads are sufficient for 1000+ concurrent requests
+    # Previously: 2000 threads × ~1MB stack = 2GB baseline memory
+    # Now: 200 threads × ~1MB stack = 200MB baseline memory (10x reduction)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    executor_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2000)
+    executor_pool = concurrent.futures.ThreadPoolExecutor(max_workers=200)
     loop.set_default_executor(executor_pool)
 
     # Build pipeline AFTER event loop is created (for proper semaphore binding)

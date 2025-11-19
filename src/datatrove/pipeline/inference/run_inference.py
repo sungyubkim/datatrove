@@ -11,6 +11,8 @@ Parts of this implementation are adapted from https://github.com/allenai/olmocr
 from __future__ import annotations
 
 import asyncio
+import gc
+import tracemalloc
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from functools import partial
@@ -555,6 +557,10 @@ class InferenceRunner(PipelineStep):
             rank: Process rank identifier for distributed processing
             world_size: Total number of processes in distributed setup
         """
+        # Start memory tracking to monitor for leaks
+        tracemalloc.start()
+        logger.info("Memory tracking started")
+
         semaphore = asyncio.Semaphore(self.config.max_concurrent_generations)
         # Endpoint servers don't need a server task - they just use external endpoints
         is_endpoint_server = hasattr(self.server, "endpoint_url")
@@ -664,6 +670,17 @@ class InferenceRunner(PipelineStep):
                         processed_ids.remove(record.id)
                         continue
 
+                    # Periodic memory monitoring (every 100 documents)
+                    if record_idx > 0 and record_idx % 100 == 0:
+                        gc.collect()  # Force garbage collection to get accurate readings
+                        current_mem, peak_mem = tracemalloc.get_traced_memory()
+                        logger.info(
+                            f"Memory at document {record_idx}: "
+                            f"current={current_mem / 1024**2:.1f}MB, "
+                            f"peak={peak_mem / 1024**2:.1f}MB, "
+                            f"tasks_pool_size={len(tasks_pool)}"
+                        )
+
                     # Throttle by task pool size
                     while len(tasks_pool) >= self.config.max_concurrent_documents:
                         done, tasks_pool = await asyncio.wait(tasks_pool, return_when=asyncio.FIRST_COMPLETED)
@@ -683,6 +700,15 @@ class InferenceRunner(PipelineStep):
                         await self.checkpoint_manager.cleanup_last_chunk(rank, chunk_index)
             completed_successfully = True
         finally:
+            # Log final memory statistics
+            current_mem, peak_mem = tracemalloc.get_traced_memory()
+            logger.info(
+                f"Final memory statistics: "
+                f"current={current_mem / 1024**2:.1f}MB, "
+                f"peak={peak_mem / 1024**2:.1f}MB"
+            )
+            tracemalloc.stop()
+
             # 4. shutdown inference server and metrics
             if not is_endpoint_server:
                 server_task.cancel()
