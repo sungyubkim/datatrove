@@ -211,6 +211,7 @@ class VERLRolloutFunction:
                             result.text,
                             ground_truth,
                             sandbox_fusion_url=sandbox_url,
+                            memory_limit_mb=512,
                         )
                     return score_dict
                 except Exception as e:
