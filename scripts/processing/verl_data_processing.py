@@ -725,8 +725,8 @@ def build_pipeline(args):
                 model_name_or_path=args.model_name_or_path,
                 default_generation_params={"temperature": args.sampling_temperature},  # Dict format
                 max_concurrent_generations=args.max_concurrent_inference,  # Renamed
-                max_concurrent_documents=100,  # Renamed (reduced to prevent thread pool exhaustion)
-                metric_interval=120,  # Report metrics every 2 minutes
+                max_concurrent_documents=args.max_concurrent_documents,  # Configurable via CLI
+                metric_interval=60,  # Report metrics every 1 minute
                 endpoint_url=args.endpoint_url,
             ),
             output_writer=ParquetWriter(
@@ -895,6 +895,14 @@ For details: examples/verl_data_processing.py
         default=5,
         metavar='INT',
         help='Number of concurrent workers per task (default: 5)'
+    )
+    execution.add_argument(
+        '--max-concurrent-documents',
+        type=int,
+        default=100,
+        metavar='INT',
+        help='Maximum concurrent documents being processed (default: 100). '
+             'Reduce if experiencing thread pool exhaustion or memory issues.'
     )
 
     # ============================================================
