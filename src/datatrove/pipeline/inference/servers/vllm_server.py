@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from datatrove.pipeline.inference.servers import InferenceServer
+from datatrove.pipeline.inference.servers.local_base import LocalInferenceServer
 from datatrove.utils._import_utils import check_required_dependencies
 
 
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from datatrove.pipeline.inference.run_inference import InferenceConfig
 
 
-class VLLMServer(InferenceServer):
+class VLLMServer(LocalInferenceServer):
     """VLLM inference server implementation."""
 
     def __init__(self, config: "InferenceConfig"):

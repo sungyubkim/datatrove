@@ -22,6 +22,7 @@ classifiers = [
 keywords = ["data", "machine", "learning", "processing"]
 requires-python = ">=3.10.0"
 dependencies = [
+    "datasets>=4.3.0",
     "dill>=0.3.0",
     "fsspec>=2023.12.2",
     "huggingface-hub>=0.17.0",
@@ -29,6 +30,8 @@ dependencies = [
     "loguru>=0.7.0",
     "multiprocess",
     "numpy>=2.0.0",
+    "rouge-score>=0.1.2",
+    "sacrebleu>=2.5.1",
     "tqdm",
 ]
 
@@ -88,6 +91,16 @@ inference = [
   "httpx",
   "aiosqlite",
 ]
+reward_scoring = [
+  "requests",      # For sandbox_fusion code execution
+  "math-verify",   # For MATH dataset scoring
+  "mathruler",     # For Geometry3K scoring
+  "langdetect",    # For IFEval language detection
+  "immutabledict", # For IFEval immutable data structures
+  "nltk",          # For IFEval sentence/word counting
+  "psutil",        # For CodeV Verilog verification process management
+  "networkx",      # For CodeV Verilog module hierarchy analysis
+]
 ray = [
   "ray"
 ]
@@ -141,6 +154,10 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 datatrove = ["assets/*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 lint.ignore = [

@@ -50,6 +50,27 @@ class EndpointServer(InferenceServer):
         """Wait until the endpoint is ready. Uses shorter delays since we're just checking endpoint availability."""
         await super().wait_until_ready(max_attempts=max_attempts, delay_sec=delay_sec)
 
+    async def is_ready(self) -> bool:
+        """
+        Check if the endpoint server is ready to accept requests.
+
+        Performs a health check by calling the /v1/models endpoint.
+
+        Returns:
+            True if server responds successfully, False otherwise
+        """
+        import httpx
+        from loguru import logger
+
+        url = f"{self.endpoint_url}/v1/models"
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, timeout=5.0)
+                return response.status_code == 200
+        except Exception as e:
+            logger.debug(f"Endpoint server health check failed: {e}")
+            return False
+
     def get_base_url(self) -> str:
         """Get the base URL for making requests."""
         return self.endpoint_url.rstrip("/")

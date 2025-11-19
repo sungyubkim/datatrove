@@ -11,6 +11,8 @@ Parts of this implementation are adapted from https://github.com/allenai/olmocr
 from __future__ import annotations
 
 import asyncio
+import gc
+import tracemalloc
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from functools import partial
@@ -64,6 +66,73 @@ class InferenceError(Exception):
         super().__init__(
             f"Failed to process document {document.id if document is not None else '?'}: {error}. Payload: {payload if payload is not None else '?'}"
         )
+
+
+def reconstruct_gptoss_from_vllm_response(choice: dict) -> str:
+    """
+    Reconstruct original GPT OSS format from vLLM's parsed response.
+
+    When vLLM's reasoning parser is enabled, it automatically parses GPT OSS format into:
+    - message.reasoning_content: Analysis channel content (<|channel|>analysis)
+    - message.content: Final channel content (<|channel|>final)
+    - message.tool_calls: Tool invocations (to=functions.X)
+
+    This function reconstructs the original GPT OSS format that scorers expect,
+    which includes all the special tokens (<|start|>, <|channel|>, <|message|>, etc.).
+
+    Args:
+        choice: Response choice dict from vLLM (response["choices"][0])
+
+    Returns:
+        Reconstructed GPT OSS format string, or original content if not parsed
+
+    Example:
+        Input (vLLM parsed):
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "The answer is 42",
+                    "reasoning_content": "Let me think... 6*7=42"
+                }
+            }
+
+        Output (reconstructed):
+            <|start|>assistant<|channel|>analysis<|message|>Let me think... 6*7=42<|end|>
+            <|start|>assistant<|channel|>final<|message|>The answer is 42<|return|>
+    """
+    message = choice.get("message", {})
+    reasoning_content = message.get("reasoning_content")
+    content = message.get("content")
+    tool_calls = message.get("tool_calls")
+
+    # If no reasoning_content or tool_calls, vLLM parser wasn't active
+    # Return original content as-is
+    if reasoning_content is None and tool_calls is None:
+        return content or ""
+
+    # Reconstruct GPT OSS format from parsed components
+    parts = []
+
+    # 1. Analysis channel (thinking/reasoning)
+    if reasoning_content:
+        parts.append(f"<|start|>assistant<|channel|>analysis<|message|>{reasoning_content}<|end|>")
+
+    # 2. Tool calls
+    if tool_calls:
+        for tool_call in tool_calls:
+            function = tool_call.get("function", {})
+            tool_name = function.get("name", "unknown")
+            tool_args = function.get("arguments", "{}")
+            parts.append(
+                f"<|start|>assistant to=functions.{tool_name}<|channel|>commentary json<|message|>{tool_args}<|call|>"
+            )
+
+    # 3. Final channel (only if no tool calls)
+    # Tool calls typically don't include final channel
+    if content and not tool_calls:
+        parts.append(f"<|start|>assistant<|channel|>final<|message|>{content}<|return|>")
+
+    return "\n".join(parts)
 
 
 # Type alias for the generate callback function
@@ -319,7 +388,8 @@ class InferenceRunner(PipelineStep):
 
                     # Parse response based on endpoint type
                     if self.config.use_chat:
-                        text = choice["message"]["content"]
+                        # Reconstruct GPT OSS format if vLLM reasoning parser was used
+                        text = reconstruct_gptoss_from_vllm_response(choice)
                     else:
                         text = choice["text"]
 
@@ -487,6 +557,10 @@ class InferenceRunner(PipelineStep):
             rank: Process rank identifier for distributed processing
             world_size: Total number of processes in distributed setup
         """
+        # Start memory tracking to monitor for leaks
+        tracemalloc.start()
+        logger.info("Memory tracking started")
+
         semaphore = asyncio.Semaphore(self.config.max_concurrent_generations)
         # Endpoint servers don't need a server task - they just use external endpoints
         is_endpoint_server = hasattr(self.server, "endpoint_url")
@@ -596,6 +670,17 @@ class InferenceRunner(PipelineStep):
                         processed_ids.remove(record.id)
                         continue
 
+                    # Periodic memory monitoring (every 100 documents)
+                    if record_idx > 0 and record_idx % 100 == 0:
+                        gc.collect()  # Force garbage collection to get accurate readings
+                        current_mem, peak_mem = tracemalloc.get_traced_memory()
+                        logger.info(
+                            f"Memory at document {record_idx}: "
+                            f"current={current_mem / 1024**2:.1f}MB, "
+                            f"peak={peak_mem / 1024**2:.1f}MB, "
+                            f"tasks_pool_size={len(tasks_pool)}"
+                        )
+
                     # Throttle by task pool size
                     while len(tasks_pool) >= self.config.max_concurrent_documents:
                         done, tasks_pool = await asyncio.wait(tasks_pool, return_when=asyncio.FIRST_COMPLETED)
@@ -615,6 +700,15 @@ class InferenceRunner(PipelineStep):
                         await self.checkpoint_manager.cleanup_last_chunk(rank, chunk_index)
             completed_successfully = True
         finally:
+            # Log final memory statistics
+            current_mem, peak_mem = tracemalloc.get_traced_memory()
+            logger.info(
+                f"Final memory statistics: "
+                f"current={current_mem / 1024**2:.1f}MB, "
+                f"peak={peak_mem / 1024**2:.1f}MB"
+            )
+            tracemalloc.stop()
+
             # 4. shutdown inference server and metrics
             if not is_endpoint_server:
                 server_task.cancel()
