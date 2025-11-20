@@ -1243,6 +1243,17 @@ class InferenceRunner(PipelineStep):
             # Yield documents from sync queue
             with self.track_time(unit="total"):
                 while True:
+                    # Check if background task failed before yielding next document
+                    if future.done():
+                        # This will re-raise any exception from async_worker or run_async
+                        try:
+                            future.result()
+                        except Exception as e:
+                            # Log before re-raising for visibility
+                            logger.error(f"Background task failed in run_with_yield: {type(e).__name__}: {e}")
+                            raise
+                        break
+
                     try:
                         # Get document from queue (timeout to allow checking for exceptions)
                         doc = sync_queue.get(timeout=0.1)
@@ -1253,16 +1264,7 @@ class InferenceRunner(PipelineStep):
                         yield doc
 
                     except Empty:
-                        # Check if background task failed
-                        if future.done():
-                            # This will re-raise any exception from async_worker or run_async
-                            try:
-                                future.result()
-                            except Exception as e:
-                                # Log before re-raising for visibility
-                                logger.error(f"Background task failed in run_with_yield: {type(e).__name__}: {e}")
-                                raise
-                            break
+                        # Timeout occurred, loop back to check if background task failed
                         continue
 
             # Wait for background task to complete and check for exceptions
