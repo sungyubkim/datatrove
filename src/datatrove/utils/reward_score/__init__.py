@@ -205,13 +205,30 @@ def compute_score(
         "taco",
         # Additional code execution datasets
         "code-contests-plus",
+        # KodCode datasets (sungyub/kodcode-v1-verl) - 12 variants
+        "kodcode-algorithm",
+        "kodcode-apps",
+        "kodcode-code_contests",
+        "kodcode-codeforces",
+        "kodcode-data_structure",
+        "kodcode-docs",
+        "kodcode-evol",
+        "kodcode-filter",
         "kodcode-leetcode",
-        "oss",  # AceCode
+        "kodcode-package",
+        "kodcode-prefill",
+        "kodcode-taco",
+        # AceCode datasets (sungyub/acecode-87k-verl)
+        "bigcode_python_fns",  # AceCode: BigCode Python functions
+        "evol",  # AceCode: Evol-Instruct style
+        "oss",  # AceCode: Open source software
         "rstar-coder",
         "train-code-leetcode-Easy",
         "train-code-leetcode-Medium",
         "train-code-leetcode-Hard",
+        "test-code-leetcode-Easy",
         "test-code-leetcode-Medium",
+        "test-code-leetcode-Hard",
         "train-code-taco-easy",
         "train-code-taco-medium",
         "train-code-taco-hard",

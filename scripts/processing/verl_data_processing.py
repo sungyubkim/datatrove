@@ -96,7 +96,6 @@ from datatrove.pipeline.stats.base import BaseStats
 from datatrove.pipeline.writers import ParquetWriter
 from datatrove.utils.reward_score import compute_score
 
-
 # ==============================================================================
 # Picklable Configuration Wrappers for Multiprocessing
 # ==============================================================================
@@ -204,7 +203,9 @@ class PostprocessAndScore:
         import asyncio
 
         # Read existing responses from previous processing runs (for append behavior)
-        existing_responses = document.metadata.get("extra_info", {}).get("responses", [])
+        existing_responses = document.metadata.get("extra_info", {}).get(
+            "responses", []
+        )
 
         inference_results = document.metadata.get("inference_results", [])
         # Reconstruct objects from checkpoint dictionaries
@@ -258,10 +259,9 @@ class PostprocessAndScore:
                 }
 
         # Score all responses concurrently
-        scores = await asyncio.gather(*[
-            score_single_response(result)
-            for result in inference_results
-        ])
+        scores = await asyncio.gather(
+            *[score_single_response(result) for result in inference_results]
+        )
 
         # Create unified response objects (merge inference results + scores)
         # This unified structure is stored in checkpoints and used for output
@@ -377,49 +377,74 @@ class ResponseScoreStats(BaseStats):
 # Explicit schema prevents PyArrow from dropping fields during automatic schema inference.
 # This is critical for preserving error fields (inference_error, score_error) which may
 # be empty strings in some rows and actual error messages in others.
-VERL_SCHEMA = pa.schema([
-    ('data_source', pa.string()),
-    ('prompt', pa.list_(pa.struct([
-        ('role', pa.string()),
-        ('content', pa.string())
-    ]))),
-    ('ability', pa.string()),
-    ('reward_model', pa.struct([
-        ('style', pa.string()),
-        ('ground_truth', pa.string())
-    ])),
-    ('extra_info', pa.struct([
-        # Original VERL metadata field (preserved from input)
-        ('index', pa.int64()),
-        # Aggregate statistics (displayed first for better UX in parquet viewers)
-        ('avg_score', pa.float64()),
-        ('max_score', pa.float64()),
-        ('min_score', pa.float64()),
-        ('success_rate', pa.float64()),
-        ('num_correct', pa.int64()),
-        ('num_responses', pa.int64()),
-        # Unified responses list with all inference + scoring fields (at end to not block view)
-        ('responses', pa.list_(pa.struct([
-            # Inference result fields
-            ('text', pa.string()),
-            ('finish_reason', pa.string()),
-            ('usage', pa.struct([
-                ('prompt_tokens', pa.int64()),
-                ('completion_tokens', pa.int64()),
-                ('total_tokens', pa.int64())
-            ])),
-            ('inference_error', pa.string()),  # CRITICAL: Must be explicitly defined
-            ('is_success', pa.bool_()),
-            # Scoring result fields
-            ('score', pa.float64()),
-            ('score_error', pa.string()),  # CRITICAL: Must be explicitly defined
-            ('reward_think', pa.float64()),
-            ('reward_fmt', pa.float64()),
-            ('reward_correct', pa.float64()),
-            ('reward_length', pa.float64())
-        ])))
-    ]))
-])
+VERL_SCHEMA = pa.schema(
+    [
+        ("data_source", pa.string()),
+        (
+            "prompt",
+            pa.list_(pa.struct([("role", pa.string()), ("content", pa.string())])),
+        ),
+        ("ability", pa.string()),
+        (
+            "reward_model",
+            pa.struct([("style", pa.string()), ("ground_truth", pa.string())]),
+        ),
+        (
+            "extra_info",
+            pa.struct(
+                [
+                    # Original VERL metadata field (preserved from input)
+                    ("index", pa.int64()),
+                    # Aggregate statistics (displayed first for better UX in parquet viewers)
+                    ("avg_score", pa.float64()),
+                    ("max_score", pa.float64()),
+                    ("min_score", pa.float64()),
+                    ("success_rate", pa.float64()),
+                    ("num_correct", pa.int64()),
+                    ("num_responses", pa.int64()),
+                    # Unified responses list with all inference + scoring fields (at end to not block view)
+                    (
+                        "responses",
+                        pa.list_(
+                            pa.struct(
+                                [
+                                    # Inference result fields
+                                    ("text", pa.string()),
+                                    ("finish_reason", pa.string()),
+                                    (
+                                        "usage",
+                                        pa.struct(
+                                            [
+                                                ("prompt_tokens", pa.int64()),
+                                                ("completion_tokens", pa.int64()),
+                                                ("total_tokens", pa.int64()),
+                                            ]
+                                        ),
+                                    ),
+                                    (
+                                        "inference_error",
+                                        pa.string(),
+                                    ),  # CRITICAL: Must be explicitly defined
+                                    ("is_success", pa.bool_()),
+                                    # Scoring result fields
+                                    ("score", pa.float64()),
+                                    (
+                                        "score_error",
+                                        pa.string(),
+                                    ),  # CRITICAL: Must be explicitly defined
+                                    ("reward_think", pa.float64()),
+                                    ("reward_fmt", pa.float64()),
+                                    ("reward_correct", pa.float64()),
+                                    ("reward_length", pa.float64()),
+                                ]
+                            )
+                        ),
+                    ),
+                ]
+            ),
+        ),
+    ]
+)
 
 
 # ==============================================================================
@@ -463,12 +488,18 @@ def verl_to_document_adapter(
                 # Convert sets to lists for JSON compatibility
                 if isinstance(gt_data, dict) and "answer" in gt_data:
                     answer = gt_data["answer"]
-                    for key in ["input_port_width", "output_port_width",
-                               "clock_port_polarity", "reset_port_polarity_sync"]:
+                    for key in [
+                        "input_port_width",
+                        "output_port_width",
+                        "clock_port_polarity",
+                        "reset_port_polarity_sync",
+                    ]:
                         if key in answer and isinstance(answer[key], set):
                             # Convert set of tuples to list of lists
-                            answer[key] = [list(item) if isinstance(item, tuple) else item
-                                          for item in answer[key]]
+                            answer[key] = [
+                                list(item) if isinstance(item, tuple) else item
+                                for item in answer[key]
+                            ]
                 reward_model["ground_truth"] = json.dumps(gt_data)
             except Exception as e:
                 # If unpickling fails, keep as-is and log warning
@@ -607,9 +638,7 @@ def document_to_verl_adapter(self, document: Document) -> dict:
         # Extract inference results and scores
         inference_results = document.metadata.get("inference_results", [])
         # Reconstruct objects from checkpoint dictionaries
-        inference_results = [
-            reconstruct_inference_result(r) for r in inference_results
-        ]
+        inference_results = [reconstruct_inference_result(r) for r in inference_results]
         response_scores = document.metadata.get("response_scores", [])
 
         # Validate that inference results and scores are aligned
@@ -649,9 +678,9 @@ def document_to_verl_adapter(self, document: Document) -> dict:
                         "text": "",  # Empty string instead of None (schema consistent)
                         "finish_reason": "error",
                         "usage": normalize_usage(None),
-                        "inference_error": result.error
-                        if hasattr(result, "error")
-                        else "unknown",
+                        "inference_error": (
+                            result.error if hasattr(result, "error") else "unknown"
+                        ),
                         "is_success": False,
                         # Score fields (0.0 for failed inference)
                         "score": score.get("score", 0.0),
@@ -739,7 +768,11 @@ def build_pipeline(args):
                 max_concurrent_requests=args.max_concurrent_inference,
                 max_concurrent_tasks=100,  # Reduced to prevent thread pool exhaustion and deadlock
                 metric_interval=120,  # Report metrics every 2 minutes
-                external_endpoint=args.remote_vllm_endpoint if args.inference_server_type == "vllm-remote" else None,
+                external_endpoint=(
+                    args.remote_vllm_endpoint
+                    if args.inference_server_type == "vllm-remote"
+                    else None
+                ),
             ),
             output_writer=ParquetWriter(
                 output_folder=args.output_dir,
@@ -793,197 +826,199 @@ Examples:
 
 For more examples: scripts/processing/run_verl_examples.sh
 For details: examples/verl_data_processing.py
-        """
+        """,
     )
 
     # ============================================================
     # Required Arguments
     # ============================================================
-    required = parser.add_argument_group('required arguments')
+    required = parser.add_argument_group("required arguments")
     required.add_argument(
-        '--input-data',
+        "--input-data",
         required=True,
         type=str,
-        metavar='PATH',
-        help='Path to input VERL parquet file or directory'
+        metavar="PATH",
+        help="Path to input VERL parquet file or directory",
     )
     required.add_argument(
-        '--output-dir',
+        "--output-dir",
         required=True,
         type=str,
-        metavar='PATH',
-        help='Output directory for processed parquet files'
+        metavar="PATH",
+        help="Output directory for processed parquet files",
     )
     required.add_argument(
-        '--model-name-or-path',
+        "--model-name-or-path",
         required=True,
         type=str,
-        metavar='TEXT',
-        help='Model name (HuggingFace Hub) or local path (e.g., meta-llama/Llama-3-8B)'
+        metavar="TEXT",
+        help="Model name (HuggingFace Hub) or local path (e.g., meta-llama/Llama-3-8B)",
     )
 
     # ============================================================
     # Response Generation Settings
     # ============================================================
-    generation = parser.add_argument_group('response generation settings')
+    generation = parser.add_argument_group("response generation settings")
     generation.add_argument(
-        '--num-responses-per-prompt',
+        "--num-responses-per-prompt",
         type=int,
         default=10,
-        metavar='INT',
-        help='Number of responses to generate per prompt (default: 10)'
+        metavar="INT",
+        help="Number of responses to generate per prompt (default: 10)",
     )
     generation.add_argument(
-        '--sampling-temperature',
+        "--sampling-temperature",
         type=float,
         default=0.7,
-        metavar='FLOAT',
-        help='Sampling temperature for response diversity (default: 0.7)'
+        metavar="FLOAT",
+        help="Sampling temperature for response diversity (default: 0.7)",
     )
     generation.add_argument(
-        '--max-tokens-per-response',
+        "--max-tokens-per-response",
         type=int,
         default=2048,
-        metavar='INT',
-        help='Maximum tokens per generated response (default: 2048)'
+        metavar="INT",
+        help="Maximum tokens per generated response (default: 2048)",
     )
 
     # ============================================================
     # Inference Server Settings
     # ============================================================
-    server = parser.add_argument_group('inference server settings')
+    server = parser.add_argument_group("inference server settings")
     server.add_argument(
-        '--inference-server-type',
+        "--inference-server-type",
         type=str,
-        choices=['vllm', 'sglang', 'vllm-remote'],
-        default='vllm',
-        help='Type of inference server to use (default: vllm)'
+        choices=["vllm", "sglang", "vllm-remote"],
+        default="vllm",
+        help="Type of inference server to use (default: vllm)",
     )
     server.add_argument(
-        '--remote-vllm-endpoint',
+        "--remote-vllm-endpoint",
         type=str,
-        metavar='URL',
-        help='Remote vLLM server endpoint URL (required when --inference-server-type=vllm-remote)'
+        metavar="URL",
+        help="Remote vLLM server endpoint URL (required when --inference-server-type=vllm-remote)",
     )
     server.add_argument(
-        '--max-concurrent-inference',
+        "--max-concurrent-inference",
         type=int,
         default=100,
-        metavar='INT',
-        help='Maximum concurrent inference requests (default: 100)'
+        metavar="INT",
+        help="Maximum concurrent inference requests (default: 100)",
     )
 
     # ============================================================
     # Reward Scoring Settings
     # ============================================================
-    scoring = parser.add_argument_group('reward scoring settings')
+    scoring = parser.add_argument_group("reward scoring settings")
     scoring.add_argument(
-        '--sandbox-fusion-url',
+        "--sandbox-fusion-url",
         type=str,
-        metavar='URL',
-        help='Sandbox Fusion server URL for code execution scoring (optional, required for code datasets like codecontests)'
+        metavar="URL",
+        help="Sandbox Fusion server URL for code execution scoring (optional, required for code datasets like codecontests)",
     )
     scoring.add_argument(
-        '--max-concurrent-scoring',
+        "--max-concurrent-scoring",
         type=int,
         default=50,
-        metavar='INT',
-        help='Maximum concurrent scoring requests to sandbox server (default: 50)'
+        metavar="INT",
+        help="Maximum concurrent scoring requests to sandbox server (default: 50)",
     )
 
     # ============================================================
     # Parallel Execution Settings
     # ============================================================
-    execution = parser.add_argument_group('parallel execution settings')
+    execution = parser.add_argument_group("parallel execution settings")
     execution.add_argument(
-        '--num-parallel-tasks',
+        "--num-parallel-tasks",
         type=int,
         default=10,
-        metavar='INT',
-        help='Number of parallel processing tasks for data sharding (default: 10)'
+        metavar="INT",
+        help="Number of parallel processing tasks for data sharding (default: 10)",
     )
     execution.add_argument(
-        '--num-concurrent-workers',
+        "--num-concurrent-workers",
         type=int,
         default=5,
-        metavar='INT',
-        help='Number of concurrent workers per task (default: 5)'
+        metavar="INT",
+        help="Number of concurrent workers per task (default: 5)",
     )
 
     # ============================================================
     # Checkpointing & Logging
     # ============================================================
-    checkpointing = parser.add_argument_group('checkpointing and logging')
+    checkpointing = parser.add_argument_group("checkpointing and logging")
     checkpointing.add_argument(
-        '--checkpoint-dir',
+        "--checkpoint-dir",
         type=str,
-        default='checkpoints/verl',
-        metavar='PATH',
-        help='Directory for saving processing checkpoints (default: checkpoints/verl)'
+        default="checkpoints/verl",
+        metavar="PATH",
+        help="Directory for saving processing checkpoints (default: checkpoints/verl)",
     )
     checkpointing.add_argument(
-        '--log-dir',
+        "--log-dir",
         type=str,
-        default='logs/verl_processing',
-        metavar='PATH',
-        help='Directory for saving execution logs (default: logs/verl_processing)'
+        default="logs/verl_processing",
+        metavar="PATH",
+        help="Directory for saving execution logs (default: logs/verl_processing)",
     )
     checkpointing.add_argument(
-        '--stats-output-dir',
+        "--stats-output-dir",
         type=str,
-        metavar='PATH',
-        help='Directory for statistics output (optional, enables statistics collection if specified)'
+        metavar="PATH",
+        help="Directory for statistics output (optional, enables statistics collection if specified)",
     )
     checkpointing.add_argument(
-        '--checkpoint-frequency',
+        "--checkpoint-frequency",
         type=int,
         default=500,
-        metavar='INT',
-        help='Save checkpoint every N processed documents (default: 500). '
-             'Also controls ParquetWriter batch size for consistent flushing.'
+        metavar="INT",
+        help="Save checkpoint every N processed documents (default: 500). "
+        "Also controls ParquetWriter batch size for consistent flushing.",
     )
 
     # ============================================================
     # Data Processing Options
     # ============================================================
-    processing = parser.add_argument_group('data processing options')
+    processing = parser.add_argument_group("data processing options")
     processing.add_argument(
-        '--batch-size-for-reading',
+        "--batch-size-for-reading",
         type=int,
         default=100,
-        metavar='INT',
-        help='Batch size for reading input parquet files (default: 100)'
+        metavar="INT",
+        help="Batch size for reading input parquet files (default: 100)",
     )
     processing.add_argument(
-        '--output-compression',
+        "--output-compression",
         type=str,
-        choices=['snappy', 'gzip', 'none'],
-        default='snappy',
-        help='Compression algorithm for output parquet files (default: snappy)'
+        choices=["snappy", "gzip", "none"],
+        default="snappy",
+        help="Compression algorithm for output parquet files (default: snappy)",
     )
     processing.add_argument(
-        '--output-filename-pattern',
+        "--output-filename-pattern",
         type=str,
-        default='${rank}_chunk_${chunk_index}.parquet',
-        metavar='TEXT',
-        help='Output filename pattern with variables ${rank} and ${chunk_index} (default: ${rank}_chunk_${chunk_index}.parquet)'
+        default="${rank}_chunk_${chunk_index}.parquet",
+        metavar="TEXT",
+        help="Output filename pattern with variables ${rank} and ${chunk_index} (default: ${rank}_chunk_${chunk_index}.parquet)",
     )
 
     # ============================================================
     # Error Handling
     # ============================================================
-    error_handling = parser.add_argument_group('error handling')
+    error_handling = parser.add_argument_group("error handling")
     error_handling.add_argument(
-        '--stop-on-bad-request',
-        action='store_true',
-        help='Stop processing when a BadRequestError occurs (default: skip problematic documents and continue)'
+        "--stop-on-bad-request",
+        action="store_true",
+        help="Stop processing when a BadRequestError occurs (default: skip problematic documents and continue)",
     )
 
     args = parser.parse_args()
 
     # Validation
-    if args.inference_server_type == 'vllm-remote' and not args.remote_vllm_endpoint:
-        parser.error('--remote-vllm-endpoint is required when --inference-server-type=vllm-remote')
+    if args.inference_server_type == "vllm-remote" and not args.remote_vllm_endpoint:
+        parser.error(
+            "--remote-vllm-endpoint is required when --inference-server-type=vllm-remote"
+        )
 
     # Create output directories if they don't exist
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
